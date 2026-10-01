@@ -6,7 +6,7 @@ import io
 # Page config - Standard Excel Wide Layout
 st.set_page_config(page_title="PO vs PR Summary", page_icon="📊", layout="wide")
 
-# Excel Grid Styling (Light Theme, Borders, Compact Padding, Wide Layout)
+# Excel Grid Styling (Light Theme, Monospace/Segoe UI, Gray Borders, Compact Cell Padding)
 st.markdown("""
     <style>
         /* Hide default Streamlit headers, footers, and menu bars */
@@ -18,6 +18,18 @@ st.markdown("""
         /* Force White Background and Excel Aesthetics */
         .main {
             background-color: #ffffff !important;
+        }
+
+        /* KPI Top Metric Cards for Light Theme */
+        [data-testid="stMetricValue"] {
+            font-size: 20px !important;
+            font-weight: bold !important;
+            color: #111111 !important;
+        }
+        
+        [data-testid="stMetricLabel"] {
+            font-size: 13px !important;
+            color: #555555 !important;
         }
 
         .stTable {
@@ -135,7 +147,7 @@ if show_uploaders:
                 # Fill missing text values
                 merged['Vendor Name'] = merged['Vendor_PR'].fillna(merged['Vendor_PO']).fillna('')
                 
-                # Ensure all quantities are clean integers
+                # Safe numeric conversions (Prevent NaN integer crashes)
                 merged['PO Qty'] = pd.to_numeric(merged['PO_Qty'], errors='coerce').fillna(0).astype(int)
                 merged['PR Qty'] = pd.to_numeric(merged['PR_Qty'], errors='coerce').fillna(0).astype(int)
                 merged['PRMTD'] = pd.to_numeric(merged['PRMTD'], errors='coerce').fillna(0).astype(int)
@@ -149,7 +161,8 @@ if show_uploaders:
                 merged['Short'] = merged['Diff'].apply(lambda x: abs(x) if x < 0 else 0).astype(int)
                 merged['Sl.no'] = range(1, len(merged) + 1)
 
-                # Overall Totals
+                # Overall Totals for KPI Metrics Header
+                total_pos_cnt = len(merged)
                 total_po = int(merged['PO Qty'].sum())
                 total_pr = int(merged['PR Qty'].sum())
                 total_prmtd = int(merged['PRMTD'].sum())
@@ -165,7 +178,7 @@ if show_uploaders:
                 fr_numeric = np.where(final_df['PO Qty'] > 0, ((final_df['PR Qty'] + final_df['PRMTD']) / final_df['PO Qty']) * 100, 0)
                 final_df['PO FR %'] = np.round(fr_numeric).astype(int).astype(str) + '%'
 
-                # Build Total row separately without forcing datatype conversions on final_df
+                # Build Total row for bottom of table
                 total_row = pd.DataFrame([{
                     "Sl.no": "",
                     "Date": "",
@@ -180,20 +193,34 @@ if show_uploaders:
                     "PO FR %": f"{int(round(total_fr_val))}%"
                 }])
 
-                # Concatenate as string objects to prevent pandas type conversion crashes
                 display_df = pd.concat([final_df, total_row], ignore_index=True)
 
                 # Cache in Session State
                 st.session_state["processed_df"] = display_df
+                st.session_state["kpi_metrics"] = (total_pos_cnt, total_po, total_pr, total_prmtd, total_excess, total_short, total_fr_val)
 
         except Exception as e:
             st.error(f"Error processing files: {e}")
 
-# Render Excel Worksheet
+# Render Top Summary + Excel Worksheet
 if "processed_df" in st.session_state:
     display_df = st.session_state["processed_df"]
+    total_pos_cnt, total_po, total_pr, total_prmtd, total_excess, total_short, total_fr_val = st.session_state["kpi_metrics"]
 
-    # Safe cell styling loop that handles mixed string/numeric values
+    # --- TOP TOTAL SUMMARY KPI CARDS ---
+    st.markdown("### 🎯 Total Summary")
+    kpi1, kpi2, kpi3, kpi4, kpi5, kpi6, kpi7 = st.columns(7)
+    kpi1.metric("Total POs", f"{total_pos_cnt:,}")
+    kpi2.metric("PO Qty", f"{total_po:,}")
+    kpi3.metric("PR Qty (Today)", f"{total_pr:,}")
+    kpi4.metric("PRMTD Qty", f"{total_prmtd:,}")
+    kpi5.metric("Excess Qty", f"{total_excess:,}")
+    kpi6.metric("Short Qty", f"-{total_short:,}")
+    kpi7.metric("Fill Rate", f"{total_fr_val:.1f}%")
+
+    st.markdown("---")
+
+    # Safe cell styling loop that handles mixed string/numeric values without throwing errors
     def highlight_excel_cells(df):
         styles = pd.DataFrame('', index=df.index, columns=df.columns)
         
@@ -201,18 +228,14 @@ if "processed_df" in st.session_state:
             if str(row['Vendor Name']) == 'Total':
                 styles.loc[idx, :] = 'background-color: #f4b084; font-weight: bold; color: black; border-top: 2px solid black; border-bottom: 2px double black'
             else:
-                # Safe Excess conversion
                 try:
-                    excess_val = float(row['Excess'])
-                    if excess_val > 0:
+                    if float(row['Excess']) > 0:
                         styles.loc[idx, 'Excess'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
                 except (ValueError, TypeError):
                     pass
 
-                # Safe Short conversion
                 try:
-                    short_val = float(row['Short'])
-                    if short_val > 0:
+                    if float(row['Short']) > 0:
                         styles.loc[idx, 'Short'] = 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
                 except (ValueError, TypeError):
                     pass
