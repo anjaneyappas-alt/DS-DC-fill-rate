@@ -135,7 +135,7 @@ if show_uploaders:
                 # Fill missing text values
                 merged['Vendor Name'] = merged['Vendor_PR'].fillna(merged['Vendor_PO']).fillna('')
                 
-                # Ensure all quantities are clean integers (Safe conversion without inf/nan)
+                # Ensure all quantities are clean integers
                 merged['PO Qty'] = pd.to_numeric(merged['PO_Qty'], errors='coerce').fillna(0).astype(int)
                 merged['PR Qty'] = pd.to_numeric(merged['PR_Qty'], errors='coerce').fillna(0).astype(int)
                 merged['PRMTD'] = pd.to_numeric(merged['PRMTD'], errors='coerce').fillna(0).astype(int)
@@ -155,18 +155,17 @@ if show_uploaders:
                 total_prmtd = int(merged['PRMTD'].sum())
                 total_excess = int(merged['Excess'].sum())
                 total_short = int(merged['Short'].sum())
-                
                 total_fr_val = ((total_pr + total_prmtd) / total_po * 100) if total_po > 0 else 0
 
                 # Formatted headers
                 expected_headers = ["Sl.no", "Date", "PO Number", "PR_no", "Vendor Name", "PO Qty", "PR Qty", "PRMTD", "Excess", "Short"]
                 final_df = merged[expected_headers].rename(columns={'PO Number': 'PO No', 'PR_no': 'PR No'})
                 
-                # Safe PO FR % Calculation (Guarded against division by zero)
+                # Safe PO FR % Calculation
                 fr_numeric = np.where(final_df['PO Qty'] > 0, ((final_df['PR Qty'] + final_df['PRMTD']) / final_df['PO Qty']) * 100, 0)
                 final_df['PO FR %'] = np.round(fr_numeric).astype(int).astype(str) + '%'
 
-                # Excel Total Row
+                # Build Total row separately without forcing datatype conversions on final_df
                 total_row = pd.DataFrame([{
                     "Sl.no": "",
                     "Date": "",
@@ -181,38 +180,46 @@ if show_uploaders:
                     "PO FR %": f"{int(round(total_fr_val))}%"
                 }])
 
-                # Append Total Row
-                final_df = pd.concat([final_df, total_row], ignore_index=True)
+                # Concatenate as string objects to prevent pandas type conversion crashes
+                display_df = pd.concat([final_df, total_row], ignore_index=True)
 
                 # Cache in Session State
-                st.session_state["processed_df"] = final_df
+                st.session_state["processed_df"] = display_df
 
         except Exception as e:
             st.error(f"Error processing files: {e}")
 
 # Render Excel Worksheet
 if "processed_df" in st.session_state:
-    final_df = st.session_state["processed_df"]
+    display_df = st.session_state["processed_df"]
 
-    # Excel-style Highlight for Total Row and Conditional Coloring for Excess / Short
-    def apply_excel_styles(row):
-        styles = [''] * len(row)
-        if row['Vendor Name'] == 'Total':
-            return ['background-color: #f4b084; font-weight: bold; color: black; border-top: 2px solid black; border-bottom: 2px double black'] * len(row)
+    # Safe cell styling loop that handles mixed string/numeric values
+    def highlight_excel_cells(df):
+        styles = pd.DataFrame('', index=df.index, columns=df.columns)
         
-        # Excess column highlight (Light Green)
-        if isinstance(row['Excess'], (int, float)) and row['Excess'] > 0:
-            excess_idx = final_df.columns.get_loc('Excess')
-            styles[excess_idx] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
-            
-        # Short column highlight (Light Red)
-        if isinstance(row['Short'], (int, float)) and row['Short'] > 0:
-            short_idx = final_df.columns.get_loc('Short')
-            styles[short_idx] = 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
-            
+        for idx, row in df.iterrows():
+            if str(row['Vendor Name']) == 'Total':
+                styles.loc[idx, :] = 'background-color: #f4b084; font-weight: bold; color: black; border-top: 2px solid black; border-bottom: 2px double black'
+            else:
+                # Safe Excess conversion
+                try:
+                    excess_val = float(row['Excess'])
+                    if excess_val > 0:
+                        styles.loc[idx, 'Excess'] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                except (ValueError, TypeError):
+                    pass
+
+                # Safe Short conversion
+                try:
+                    short_val = float(row['Short'])
+                    if short_val > 0:
+                        styles.loc[idx, 'Short'] = 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+                except (ValueError, TypeError):
+                    pass
+                    
         return styles
 
-    styled_df = final_df.style.apply(apply_excel_styles, axis=1)
+    styled_df = display_df.style.apply(highlight_excel_cells, axis=None)
 
     # Render as native HTML Excel Table
     st.table(styled_df)
@@ -226,7 +233,7 @@ if "processed_df" in st.session_state:
 
     # Excel File Download Button at bottom
     st.markdown("---")
-    excel_bytes = generate_excel_file(final_df)
+    excel_bytes = generate_excel_file(display_df)
     st.download_button(
         label="📥 Download Summary as Excel (.xlsx)",
         data=excel_bytes,
