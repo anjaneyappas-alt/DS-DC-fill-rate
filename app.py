@@ -81,7 +81,7 @@ if show_uploaders:
                 df_po.columns = df_po.columns.str.strip()
                 df_pr.columns = df_pr.columns.str.strip()
 
-                # Determine PR Number and Receive Date columns
+                # Determine PR Number and Receive Date columns safely
                 pr_no_col = 'Receive Number' if 'Receive Number' in df_pr.columns else 'PR Number'
                 date_col = 'Receive Date' if 'Receive Date' in df_pr.columns else 'PR Date'
 
@@ -89,13 +89,15 @@ if show_uploaders:
                 df_pr_clean = df_pr.dropna(subset=['PO Number']).copy()
                 df_pr_clean['DT'] = pd.to_datetime(df_pr_clean[date_col], errors='coerce')
                 
-                # Dynamic cut-off: Filter for PR entries created in the last 15 hours
+                # Filter for PR entries created in the last 15 hours
                 max_time = df_pr_clean['DT'].max()
-                cutoff_time = max_time - pd.Timedelta(hours=15)
-
-                # Split PRs into Today (Last 15 Hours) vs Prior (MTD Previous)
-                df_today = df_pr_clean[df_pr_clean['DT'] >= cutoff_time]
-                df_prior = df_pr_clean[df_pr_clean['DT'] < cutoff_time]
+                if pd.notna(max_time):
+                    cutoff_time = max_time - pd.Timedelta(hours=15)
+                    df_today = df_pr_clean[df_pr_clean['DT'] >= cutoff_time]
+                    df_prior = df_pr_clean[df_pr_clean['DT'] < cutoff_time]
+                else:
+                    df_today = df_pr_clean
+                    df_prior = pd.DataFrame(columns=df_pr_clean.columns)
 
                 # Aggregate Today's PR Data (Only POs active in last 15 hours)
                 today_summary = df_today.groupby('PO Number').agg(
@@ -122,13 +124,13 @@ if show_uploaders:
                 merged = pd.merge(merged, prior_summary, on='PO Number', how='left')
 
                 # Format Date
-                merged['Date'] = merged['PR_Date'].dt.strftime('%d-%m-%y')
+                merged['Date'] = merged['PR_Date'].dt.strftime('%d-%m-%y').fillna('')
                 
-                # Clean and calculate values
-                merged['Vendor Name'] = merged['Vendor_PR'].fillna(merged['Vendor_PO'])
-                merged['PO Qty'] = merged['PO_Qty'].fillna(0).astype(int)
-                merged['PR Qty'] = merged['PR_Qty'].fillna(0).astype(int)
-                merged['PRMTD'] = merged['PRMTD'].fillna(0).astype(int)
+                # Clean and calculate values with fillna before type conversion to prevent NaN integer conversion errors
+                merged['Vendor Name'] = merged['Vendor_PR'].fillna(merged['Vendor_PO']).fillna('')
+                merged['PO Qty'] = merged['PO_Qty'].fillna(0).round().astype(int)
+                merged['PR Qty'] = merged['PR_Qty'].fillna(0).round().astype(int)
+                merged['PRMTD'] = merged['PRMTD'].fillna(0).round().astype(int)
                 
                 # Total Received Qty = Today's PR Qty + Previous PR Qty
                 merged['Total Received'] = merged['PR Qty'] + merged['PRMTD']
