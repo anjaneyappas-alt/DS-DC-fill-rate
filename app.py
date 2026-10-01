@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import io
 
 # Page config - Standard Excel Wide Layout
@@ -85,6 +86,9 @@ if show_uploaders:
                 pr_no_col = 'Receive Number' if 'Receive Number' in df_pr.columns else 'PR Number'
                 date_col = 'Receive Date' if 'Receive Date' in df_pr.columns else 'PR Date'
 
+                # Ensure Quantity Received is strictly numeric
+                df_pr['Quantity Received'] = pd.to_numeric(df_pr['Quantity Received'], errors='coerce').fillna(0)
+
                 # Clean PR Data
                 df_pr_clean = df_pr.dropna(subset=['PO Number']).copy()
                 df_pr_clean['DT'] = pd.to_datetime(df_pr_clean[date_col], errors='coerce')
@@ -99,7 +103,7 @@ if show_uploaders:
                     df_today = df_pr_clean
                     df_prior = pd.DataFrame(columns=df_pr_clean.columns)
 
-                # Aggregate Today's PR Data (Only POs active in last 15 hours)
+                # Aggregate Today's PR Data
                 today_summary = df_today.groupby('PO Number').agg(
                     PR_no=(pr_no_col, lambda x: " & ".join(sorted(x.dropna().astype(str).unique()))),
                     PR_Qty=('Quantity Received', 'sum'),
@@ -114,6 +118,8 @@ if show_uploaders:
 
                 # Process PO Data
                 df_po_clean = df_po.dropna(subset=['Purchase Order Number']).copy()
+                df_po_clean['QuantityOrdered'] = pd.to_numeric(df_po_clean['QuantityOrdered'], errors='coerce').fillna(0)
+                
                 po_summary = df_po_clean.groupby('Purchase Order Number').agg(
                     PO_Qty=('QuantityOrdered', 'sum'),
                     Vendor_PO=('Vendor Name', 'first')
@@ -123,38 +129,42 @@ if show_uploaders:
                 merged = pd.merge(today_summary, po_summary, left_on='PO Number', right_on='Purchase Order Number', how='left')
                 merged = pd.merge(merged, prior_summary, on='PO Number', how='left')
 
-                # Format Date
+                # Format Date safely
                 merged['Date'] = merged['PR_Date'].dt.strftime('%d-%m-%y').fillna('')
                 
-                # Clean and calculate values with fillna before type conversion to prevent NaN integer conversion errors
+                # Fill missing text values
                 merged['Vendor Name'] = merged['Vendor_PR'].fillna(merged['Vendor_PO']).fillna('')
-                merged['PO Qty'] = merged['PO_Qty'].fillna(0).round().astype(int)
-                merged['PR Qty'] = merged['PR_Qty'].fillna(0).round().astype(int)
-                merged['PRMTD'] = merged['PRMTD'].fillna(0).round().astype(int)
+                
+                # Ensure all quantities are clean integers (Safe conversion without inf/nan)
+                merged['PO Qty'] = pd.to_numeric(merged['PO_Qty'], errors='coerce').fillna(0).astype(int)
+                merged['PR Qty'] = pd.to_numeric(merged['PR_Qty'], errors='coerce').fillna(0).astype(int)
+                merged['PRMTD'] = pd.to_numeric(merged['PRMTD'], errors='coerce').fillna(0).astype(int)
                 
                 # Total Received Qty = Today's PR Qty + Previous PR Qty
                 merged['Total Received'] = merged['PR Qty'] + merged['PRMTD']
                 
                 # Separate Excess and Short based on Total Received vs PO Qty
                 merged['Diff'] = merged['Total Received'] - merged['PO Qty']
-                merged['Excess'] = merged['Diff'].apply(lambda x: x if x > 0 else 0)
-                merged['Short'] = merged['Diff'].apply(lambda x: abs(x) if x < 0 else 0)
+                merged['Excess'] = merged['Diff'].apply(lambda x: x if x > 0 else 0).astype(int)
+                merged['Short'] = merged['Diff'].apply(lambda x: abs(x) if x < 0 else 0).astype(int)
                 merged['Sl.no'] = range(1, len(merged) + 1)
 
                 # Overall Totals
-                total_po = merged['PO Qty'].sum()
-                total_pr = merged['PR Qty'].sum()
-                total_prmtd = merged['PRMTD'].sum()
-                total_excess = merged['Excess'].sum()
-                total_short = merged['Short'].sum()
-                total_fr = ((total_pr + total_prmtd) / total_po * 100) if total_po > 0 else 0
+                total_po = int(merged['PO Qty'].sum())
+                total_pr = int(merged['PR Qty'].sum())
+                total_prmtd = int(merged['PRMTD'].sum())
+                total_excess = int(merged['Excess'].sum())
+                total_short = int(merged['Short'].sum())
+                
+                total_fr_val = ((total_pr + total_prmtd) / total_po * 100) if total_po > 0 else 0
 
                 # Formatted headers
                 expected_headers = ["Sl.no", "Date", "PO Number", "PR_no", "Vendor Name", "PO Qty", "PR Qty", "PRMTD", "Excess", "Short"]
                 final_df = merged[expected_headers].rename(columns={'PO Number': 'PO No', 'PR_no': 'PR No'})
                 
-                # Fill Rate calculated against total receipts (PR Qty + PRMTD)
-                final_df['PO FR %'] = (((merged['PR Qty'] + merged['PRMTD']) / merged['PO Qty']).fillna(0) * 100).round(0).astype(int).astype(str) + '%'
+                # Safe PO FR % Calculation (Guarded against division by zero)
+                fr_numeric = np.where(final_df['PO Qty'] > 0, ((final_df['PR Qty'] + final_df['PRMTD']) / final_df['PO Qty']) * 100, 0)
+                final_df['PO FR %'] = np.round(fr_numeric).astype(int).astype(str) + '%'
 
                 # Excel Total Row
                 total_row = pd.DataFrame([{
@@ -168,7 +178,7 @@ if show_uploaders:
                     "PRMTD": total_prmtd,
                     "Excess": total_excess,
                     "Short": total_short,
-                    "PO FR %": f"{int(round(total_fr))}%"
+                    "PO FR %": f"{int(round(total_fr_val))}%"
                 }])
 
                 # Append Total Row
@@ -191,12 +201,12 @@ if "processed_df" in st.session_state:
             return ['background-color: #f4b084; font-weight: bold; color: black; border-top: 2px solid black; border-bottom: 2px double black'] * len(row)
         
         # Excess column highlight (Light Green)
-        if row['Excess'] > 0:
+        if isinstance(row['Excess'], (int, float)) and row['Excess'] > 0:
             excess_idx = final_df.columns.get_loc('Excess')
             styles[excess_idx] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
             
         # Short column highlight (Light Red)
-        if row['Short'] > 0:
+        if isinstance(row['Short'], (int, float)) and row['Short'] > 0:
             short_idx = final_df.columns.get_loc('Short')
             styles[short_idx] = 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
             
