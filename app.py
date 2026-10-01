@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import io
 
 # Page config - Standard Excel Wide Layout
@@ -82,15 +81,33 @@ if show_uploaders:
                 df_po.columns = df_po.columns.str.strip()
                 df_pr.columns = df_pr.columns.str.strip()
 
-                # Process PR Data (Concatenates multiple PRs using ' & ')
+                # Determine PR Number and Receive Date columns
+                pr_no_col = 'Receive Number' if 'Receive Number' in df_pr.columns else 'PR Number'
+                date_col = 'Receive Date' if 'Receive Date' in df_pr.columns else 'PR Date'
+
+                # Clean PR Data
                 df_pr_clean = df_pr.dropna(subset=['PO Number']).copy()
-                pr_no_col = 'Receive Number' if 'Receive Number' in df_pr_clean.columns else 'PR Number'
+                df_pr_clean['DT'] = pd.to_datetime(df_pr_clean[date_col], errors='coerce')
                 
-                pr_summary = df_pr_clean.groupby('PO Number').agg(
+                # Dynamic cut-off: Filter for PR entries created in the last 15 hours
+                max_time = df_pr_clean['DT'].max()
+                cutoff_time = max_time - pd.Timedelta(hours=15)
+
+                # Split PRs into Today (Last 15 Hours) vs Prior (MTD Previous)
+                df_today = df_pr_clean[df_pr_clean['DT'] >= cutoff_time]
+                df_prior = df_pr_clean[df_pr_clean['DT'] < cutoff_time]
+
+                # Aggregate Today's PR Data (Only POs active in last 15 hours)
+                today_summary = df_today.groupby('PO Number').agg(
                     PR_no=(pr_no_col, lambda x: " & ".join(sorted(x.dropna().astype(str).unique()))),
                     PR_Qty=('Quantity Received', 'sum'),
-                    PR_Date=('Receive Date', 'first'),
+                    PR_Date=('DT', 'max'),
                     Vendor_PR=('Vendor Name', 'first')
+                ).reset_index()
+
+                # Aggregate Prior MTD PR Qty per PO Number
+                prior_summary = df_prior.groupby('PO Number').agg(
+                    PRMTD=('Quantity Received', 'sum')
                 ).reset_index()
 
                 # Process PO Data
@@ -100,21 +117,24 @@ if show_uploaders:
                     Vendor_PO=('Vendor Name', 'first')
                 ).reset_index()
 
-                # Merge Data
-                merged = pd.merge(pr_summary, po_summary, left_on='PO Number', right_on='Purchase Order Number', how='left')
+                # Merge Today's PRs with PO and Prior MTD Data
+                merged = pd.merge(today_summary, po_summary, left_on='PO Number', right_on='Purchase Order Number', how='left')
+                merged = pd.merge(merged, prior_summary, on='PO Number', how='left')
+
+                # Format Date
+                merged['Date'] = merged['PR_Date'].dt.strftime('%d-%m-%y')
                 
-                # Sort chronologically from earliest to latest date
-                merged['Raw_Date'] = pd.to_datetime(merged['PR_Date'], errors='coerce')
-                merged = merged.sort_values(by='Raw_Date', ascending=True).reset_index(drop=True)
-                merged['Date'] = merged['Raw_Date'].dt.strftime('%d-%m-%y')
-                
-                # Clean values
+                # Clean and calculate values
                 merged['Vendor Name'] = merged['Vendor_PR'].fillna(merged['Vendor_PO'])
                 merged['PO Qty'] = merged['PO_Qty'].fillna(0).astype(int)
                 merged['PR Qty'] = merged['PR_Qty'].fillna(0).astype(int)
+                merged['PRMTD'] = merged['PRMTD'].fillna(0).astype(int)
                 
-                # Separate Excess and Short calculation
-                merged['Diff'] = merged['PR Qty'] - merged['PO Qty']
+                # Total Received Qty = Today's PR Qty + Previous PR Qty
+                merged['Total Received'] = merged['PR Qty'] + merged['PRMTD']
+                
+                # Separate Excess and Short based on Total Received vs PO Qty
+                merged['Diff'] = merged['Total Received'] - merged['PO Qty']
                 merged['Excess'] = merged['Diff'].apply(lambda x: x if x > 0 else 0)
                 merged['Short'] = merged['Diff'].apply(lambda x: abs(x) if x < 0 else 0)
                 merged['Sl.no'] = range(1, len(merged) + 1)
@@ -122,14 +142,17 @@ if show_uploaders:
                 # Overall Totals
                 total_po = merged['PO Qty'].sum()
                 total_pr = merged['PR Qty'].sum()
+                total_prmtd = merged['PRMTD'].sum()
                 total_excess = merged['Excess'].sum()
                 total_short = merged['Short'].sum()
-                total_fr = (total_pr / total_po * 100) if total_po > 0 else 0
+                total_fr = ((total_pr + total_prmtd) / total_po * 100) if total_po > 0 else 0
 
                 # Formatted headers
-                expected_headers = ["Sl.no", "Date", "PO Number", "PR_no", "Vendor Name", "PO Qty", "PR Qty", "Excess", "Short"]
+                expected_headers = ["Sl.no", "Date", "PO Number", "PR_no", "Vendor Name", "PO Qty", "PR Qty", "PRMTD", "Excess", "Short"]
                 final_df = merged[expected_headers].rename(columns={'PO Number': 'PO No', 'PR_no': 'PR No'})
-                final_df['PO FR %'] = ((final_df['PR Qty'] / final_df['PO Qty']).fillna(0) * 100).round(0).astype(int).astype(str) + '%'
+                
+                # Fill Rate calculated against total receipts (PR Qty + PRMTD)
+                final_df['PO FR %'] = (((merged['PR Qty'] + merged['PRMTD']) / merged['PO Qty']).fillna(0) * 100).round(0).astype(int).astype(str) + '%'
 
                 # Excel Total Row
                 total_row = pd.DataFrame([{
@@ -140,6 +163,7 @@ if show_uploaders:
                     "Vendor Name": "Total",
                     "PO Qty": total_po,
                     "PR Qty": total_pr,
+                    "PRMTD": total_prmtd,
                     "Excess": total_excess,
                     "Short": total_short,
                     "PO FR %": f"{int(round(total_fr))}%"
@@ -181,66 +205,19 @@ if "processed_df" in st.session_state:
     # Render as native HTML Excel Table
     st.table(styled_df)
 
-    # --- VECTOR PDF GENERATOR (EXCEL VIEW) ---
-    def generate_excel_pdf(df):
-        fig, ax = plt.subplots(figsize=(18, len(df) * 0.35 + 1.5))
-        ax.axis('off')
-        
-        table = ax.table(
-            cellText=df.values,
-            colLabels=df.columns,
-            cellLoc='center',
-            loc='center'
-        )
-        table.auto_set_font_size(False)
-        table.set_fontsize(9)
-        table.scale(1.2, 1.4)
+    # --- EXCEL DOWNLOAD GENERATOR ---
+    def generate_excel_file(df):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='PO vs PR Summary')
+        return output.getvalue()
 
-        col_widths = {
-            0: 0.04,  # Sl.no
-            1: 0.07,  # Date
-            2: 0.09,  # PO No
-            3: 0.13,  # PR No
-            4: 0.27,  # Vendor Name
-            5: 0.07,  # PO Qty
-            6: 0.07,  # PR Qty
-            7: 0.07,  # Excess
-            8: 0.07,  # Short
-            9: 0.07   # PO FR %
-        }
-        for (row, col), cell in table.get_celld().items():
-            cell.set_width(col_widths.get(col, 0.1))
-
-        excess_col_idx = df.columns.get_loc('Excess')
-        short_col_idx = df.columns.get_loc('Short')
-
-        for (row, col), cell in table.get_celld().items():
-            if row == 0:
-                cell.set_facecolor('#e6e6e6')
-                cell.set_text_props(color='black', weight='bold')
-            elif row == len(df):
-                cell.set_facecolor('#f4b084')
-                cell.set_text_props(color='black', weight='bold')
-            else:
-                cell.set_facecolor('#ffffff')
-                if col == excess_col_idx and df.iloc[row - 1]['Excess'] > 0:
-                    cell.set_facecolor('#d4edda')
-                    cell.set_text_props(color='#155724', weight='bold')
-                elif col == short_col_idx and df.iloc[row - 1]['Short'] > 0:
-                    cell.set_facecolor('#f8d7da')
-                    cell.set_text_props(color='#721c24', weight='bold')
-
-        pdf_buf = io.BytesIO()
-        plt.savefig(pdf_buf, format='pdf', bbox_inches='tight', facecolor='#ffffff')
-        plt.close(fig)
-        return pdf_buf.getvalue()
-
-    # Vector PDF Download Button at bottom
+    # Excel File Download Button at bottom
     st.markdown("---")
-    pdf_bytes = generate_excel_pdf(final_df)
+    excel_bytes = generate_excel_file(final_df)
     st.download_button(
-        label="📄 Download Summary as Vector PDF",
-        data=pdf_bytes,
-        file_name="PO_PR_Summary.pdf",
-        mime="application/pdf"
+        label="📥 Download Summary as Excel (.xlsx)",
+        data=excel_bytes,
+        file_name="PO_PR_Summary.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
