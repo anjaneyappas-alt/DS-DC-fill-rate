@@ -13,50 +13,47 @@ st.sidebar.header("📥 Data Input Options")
 input_method = st.sidebar.radio("Choose Input Method:", ["📋 Copy-Paste Data", "📁 Upload Files", "🔘 Demo Data"])
 
 def standardize_columns(df):
-    """Automatically maps common variations of column headers to standard names."""
+    """Maps exact ERP / WMS system column names to app standard headers."""
     if df is None or df.empty:
         return df
 
-    # Strip whitespace
+    # Strip extra whitespace from column names
     df.columns = df.columns.astype(str).str.strip()
 
-    # Dynamic Column Mapping Dictionary
+    # Exact Column Mapping
     column_mapping = {
-        # DS Name mappings
-        'ds': 'DS Name', 'ds_name': 'DS Name', 'dark_store': 'DS Name', 
-        'darkstore': 'DS Name', 'store': 'DS Name', 'store_name': 'DS Name',
-        'ds name': 'DS Name', 'dark store': 'DS Name', 'store name': 'DS Name',
+        # Dark Store mappings
+        'DS Name': 'DS Name', 'To Location Name': 'DS Name', 'To Location': 'DS Name',
+        'ds name': 'DS Name', 'to location name': 'DS Name', 'dark store': 'DS Name',
         
-        # Dispatched Qty mappings
-        'sent_qty': 'Dispatched Qty', 'qty_sent': 'Dispatched Qty', 
-        'dispatched_qty': 'Dispatched Qty', 'dispatch_qty': 'Dispatched Qty',
-        'sent qty': 'Dispatched Qty', 'qty sent': 'Dispatched Qty',
-        'dispatched qty': 'Dispatched Qty', 'dispatch qty': 'Dispatched Qty',
-        'picked_qty': 'Dispatched Qty', 'picked qty': 'Dispatched Qty',
-        
-        # TO Qty / Required Qty mappings
-        'to_qty': 'TO Qty', 'to qty': 'TO Qty', 'raised_qty': 'TO Qty',
-        'raised qty': 'TO Qty', 'required_qty': 'Required Qty', 'required qty': 'Required Qty',
-        
-        # Received Qty mappings
-        'qty_received': 'Qty Received', 'qty received': 'Qty Received',
-        'received_qty': 'Qty Received', 'received qty': 'Qty Received',
+        # Dispatched / Transferred Qty mappings
+        'Quantity Transferred': 'Dispatched Qty', 'quantity transferred': 'Dispatched Qty',
+        'Dispatched Qty': 'Dispatched Qty', 'Sent Qty': 'Dispatched Qty', 'sent qty': 'Dispatched Qty',
+        'qty sent': 'Dispatched Qty', 'Quantity': 'Dispatched Qty',
         
         # TO Number mappings
-        'to_number': 'TO Number', 'to number': 'TO Number', 'to_no': 'TO Number',
-        'to no': 'TO Number', 'to_id': 'TO Number', 'to id': 'TO Number',
+        'Transfer Order#': 'TO Number', 'transfer order#': 'TO Number',
+        'Transfer Order': 'TO Number', 'TO Number': 'TO Number',
         
-        # Item / SKU mappings
-        'sku_code': 'SKU', 'sku code': 'SKU',
-        'item_name': 'Item Name', 'item name': 'Item Name', 'description': 'Item Name'
+        # TO Qty / Required Qty mappings
+        'TO Qty': 'TO Qty', 'Required Qty': 'Required Qty', 'required qty': 'Required Qty',
+        
+        # Received Qty mappings
+        'Qty Received': 'Qty Received', 'Received Qty': 'Qty Received',
+        
+        # SKU & Item mappings
+        'SKU': 'SKU', 'sku': 'SKU', 'Product ID': 'SKU',
+        'Item Name': 'Item Name', 'item name': 'Item Name', 'Item Desc': 'Item Name'
     }
 
-    # Rename matched columns (case-insensitive)
+    # Match case-insensitively
     new_cols = {}
     for col in df.columns:
-        col_lower = col.lower().strip()
-        if col_lower in column_mapping:
-            new_cols[col] = column_mapping[col_lower]
+        if col in column_mapping:
+            new_cols[col] = column_mapping[col]
+        elif col.strip().lower() in [k.lower() for k in column_mapping.keys()]:
+            matched_key = [k for k in column_mapping.keys() if k.lower() == col.strip().lower()][0]
+            new_cols[col] = column_mapping[matched_key]
             
     return df.rename(columns=new_cols)
 
@@ -84,16 +81,16 @@ df_dispatch = None
 
 # --- INPUT HANDLING ---
 if input_method == "📋 Copy-Paste Data":
-    st.subheader("📋 Paste Raw Data Below (From Excel / Google Sheets)")
+    st.subheader("📋 Paste Raw Data Below (From Excel / CSV)")
     col_a, col_b = st.columns(2)
     
     with col_a:
-        st.markdown("**1. TO Raised Data**\n*(Headers accepted: DS Name / Dark Store, TO Qty / Required Qty, SKU, Item Name)*")
+        st.markdown("**1. TO Raised Data**")
         paste_to = st.text_area("Paste TO Raised Data", height=200)
         df_to = parse_pasted_data(paste_to)
 
     with col_b:
-        st.markdown("**2. TO Picked / Dispatched Data**\n*(Headers accepted: DS Name / Dark Store, Dispatched Qty / Sent Qty, Qty Received)*")
+        st.markdown("**2. TO Picked / Dispatched Data**")
         paste_dispatch = st.text_area("Paste Dispatch Data", height=200)
         df_dispatch = parse_pasted_data(paste_dispatch)
 
@@ -128,34 +125,33 @@ else:  # Demo Data
 # --- RECONCILIATION DATA PROCESSING ---
 if df_to is not None and df_dispatch is not None:
     
-    # Auto-detect DS Name column if still not found
+    # Auto-fallback mapping for DS Name
     if 'DS Name' not in df_dispatch.columns:
-        possible_ds_cols = [c for c in df_dispatch.columns if 'ds' in c.lower() or 'store' in c.lower()]
-        if possible_ds_cols:
-            df_dispatch.rename(columns={possible_ds_cols[0]: 'DS Name'}, inplace=True)
+        if 'To Location Name' in df_dispatch.columns:
+            df_dispatch.rename(columns={'To Location Name': 'DS Name'}, inplace=True)
 
-    # Auto-detect Dispatched Qty column if still not found
+    # Auto-fallback mapping for Dispatched Qty
     if 'Dispatched Qty' not in df_dispatch.columns:
-        possible_qty_cols = [c for c in df_dispatch.columns if 'qty' in c.lower() or 'sent' in c.lower() or 'dispatch' in c.lower()]
-        if possible_qty_cols:
-            df_dispatch.rename(columns={possible_qty_cols[0]: 'Dispatched Qty'}, inplace=True)
+        if 'Quantity Transferred' in df_dispatch.columns:
+            df_dispatch.rename(columns={'Quantity Transferred': 'Dispatched Qty'}, inplace=True)
 
     # Validate essential columns
     if 'DS Name' not in df_dispatch.columns or 'Dispatched Qty' not in df_dispatch.columns:
-        st.warning(f"⚠️ Could not automatically identify Dark Store or Dispatched Quantity columns in Dispatch Data. Found columns: `{list(df_dispatch.columns)}`")
+        st.warning(f"⚠️ Could not identify Dark Store or Dispatched Quantity columns. Found columns: `{list(df_dispatch.columns)}`")
     else:
-        # Default missing optional columns
+        # Fill missing optional columns
         for col in ['Qty Received', 'Damaged', 'Date', 'TO Number']:
             if col not in df_dispatch.columns:
                 df_dispatch[col] = df_dispatch['Dispatched Qty'] if col == 'Qty Received' else ""
 
-        # Shortage calculation
+        # Ensure numeric values
         df_dispatch['Dispatched Qty'] = pd.to_numeric(df_dispatch['Dispatched Qty'], errors='coerce').fillna(0)
         df_dispatch['Qty Received'] = pd.to_numeric(df_dispatch['Qty Received'], errors='coerce').fillna(0)
         df_dispatch['Short Quantity'] = df_dispatch['Dispatched Qty'] - df_dispatch['Qty Received']
 
-        # TO Qty resolution
+        # Determine TO Qty per DS
         if 'TO Qty' in df_to.columns:
+            df_to['TO Qty'] = pd.to_numeric(df_to['TO Qty'], errors='coerce').fillna(0)
             ds_totals = df_to.groupby('DS Name')['TO Qty'].first().reset_index()
         elif 'Required Qty' in df_to.columns:
             df_to['Required Qty'] = pd.to_numeric(df_to['Required Qty'], errors='coerce').fillna(0)
@@ -195,7 +191,7 @@ if df_to is not None and df_dispatch is not None:
         tot_unsent = tot_to_qty - tot_dispatch
         overall_fill_rate = (tot_dispatch / tot_to_qty) * 100 if tot_to_qty > 0 else 0
 
-        # Metrics Display
+        # Metrics Cards
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total TO Requested", f"{tot_to_qty:,}")
         m2.metric("Total Dispatched", f"{tot_dispatch:,}")
@@ -240,17 +236,21 @@ if df_to is not None and df_dispatch is not None:
             if selected_ds in df_to['DS Name'].values:
                 sku_filtered = df_to[df_to['DS Name'] == selected_ds].copy()
                 
-                if "Required Qty" in sku_filtered.columns and "Sent Qty" in sku_filtered.columns:
-                    sku_filtered['Required Qty'] = pd.to_numeric(sku_filtered['Required Qty'], errors='coerce').fillna(0)
-                    sku_filtered['Sent Qty'] = pd.to_numeric(sku_filtered['Sent Qty'], errors='coerce').fillna(0)
+                # Check required vs sent at SKU level
+                req_col = 'Required Qty' if 'Required Qty' in sku_filtered.columns else ('TO Qty' if 'TO Qty' in sku_filtered.columns else None)
+                sent_col = 'Sent Qty' if 'Sent Qty' in sku_filtered.columns else ('Dispatched Qty' if 'Dispatched Qty' in sku_filtered.columns else None)
+
+                if req_col and sent_col:
+                    sku_filtered[req_col] = pd.to_numeric(sku_filtered[req_col], errors='coerce').fillna(0)
+                    sku_filtered[sent_col] = pd.to_numeric(sku_filtered[sent_col], errors='coerce').fillna(0)
                     
-                    sku_filtered['Unsent Qty'] = sku_filtered['Required Qty'] - sku_filtered['Sent Qty']
+                    sku_filtered['Unsent Qty'] = sku_filtered[req_col] - sku_filtered[sent_col]
                     
-                    # STRICT FILTER: ONLY SHOW UNFULFILLED SKUS
+                    # FILTER: UNFULFILLED SKUS ONLY
                     unsent_skus_only = sku_filtered[sku_filtered['Unsent Qty'] > 0].copy()
 
                     if not unsent_skus_only.empty:
-                        display_sku_cols = ["SKU", "Item Name", "Required Qty", "Sent Qty", "Unsent Qty"]
+                        display_sku_cols = ["SKU", "Item Name", req_col, sent_col, "Unsent Qty"]
                         existing_cols = [c for c in display_sku_cols if c in unsent_skus_only.columns]
 
                         st.dataframe(
@@ -258,14 +258,14 @@ if df_to is not None and df_dispatch is not None:
                             use_container_width=True,
                             hide_index=True,
                             column_config={
-                                "Required Qty": st.column_config.NumberColumn(alignment="right"),
-                                "Sent Qty": st.column_config.NumberColumn(alignment="right"),
+                                req_col: st.column_config.NumberColumn("Required Qty", alignment="right"),
+                                sent_col: st.column_config.NumberColumn("Sent Qty", alignment="right"),
                                 "Unsent Qty": st.column_config.NumberColumn(alignment="right"),
                             }
                         )
                     else:
                         st.success(f"🎉 All SKUs for {selected_ds} were 100% fulfilled! No unsent items.")
                 else:
-                    st.info("Include `SKU`, `Required Qty`, and `Sent Qty` headers in your TO Raised input to view SKU-level shortages.")
+                    st.info("Include `SKU`, `Required Qty`, and `Sent Qty` headers in your TO Raised input to view SKU shortages.")
 else:
     st.info("👈 Please enter data or select demo mode in the sidebar to generate the report.")
