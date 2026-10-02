@@ -2,139 +2,108 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import re
 
-st.set_page_config(page_title="Single-File Transfer Reconciliation", layout="wide")
+st.set_page_config(page_title="Transfer Reconciliation Dashboard", layout="wide")
 
 st.title("📦 DC to Dark Store Transfer Reconciliation")
-st.caption("Upload your single ERP/WMS Transfer Order file to view DS-wise raised vs sent summary.")
+st.caption("Upload a single multi-sheet Excel file or raw copy-paste data to generate full transfer reconciliation reports.")
 
-# --- SIDEBAR INPUT ---
-st.sidebar.header("📥 Upload Single Data File")
-uploaded_file = st.sidebar.file_uploader("Upload Transfer Order File", type=["csv", "xlsx"])
+# --- SIDEBAR CONTROL ---
+st.sidebar.header("📥 Data Input Options")
+input_method = st.sidebar.radio("Choose Input Method:", ["📁 Upload Excel Workbook", "📋 Copy-Paste Raw Data"])
 
-use_demo = st.sidebar.checkbox("Use Demo Data", value=(uploaded_file is None))
+df_dict = {}
 
-def load_data(file):
-    df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+def standardize_columns(df):
+    if df is None or df.empty:
+        return df
+
     df.columns = df.columns.astype(str).str.strip()
-    return df
 
-df = None
-
-if uploaded_file is not None:
-    df = load_data(uploaded_file)
-elif use_demo:
-    # Sample structure matching your Excel file
-    df = pd.DataFrame({
-        "Date": ["2026-10-02"] * 8,
-        "To Location Name": ["DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS05 Basavanapura", "DS06 Kogilu", "DS07 HAL", "DS08 Rajajinagar"],
-        "Transfer Order#": ["TO-07369", "TO-07370", "TO-07361", "TO-07360", "TO-07368", "TO-07371", "TO-07364", "TO-07387"],
-        "Quantity Transferred": [557, 601, 774, 188, 520, 172, 576, 126],
-        "Reason": [
-            "HomeRun picker · TO-07333 · vehicle KA01AP5507",
-            "HomeRun picker · TO-07334 · vehicle KA52A0811",
-            "HomeRun picker · TO-07335 · vehicle KA52B0355",
-            "Internal Transfer - created by anjaneyappa.s@home-run.co",
-            "HomeRun picker · TO-07337 · vehicle KA02AN1565",
-            "HomeRun picker · TO-07338 · vehicle KA03AN0421",
-            "HomeRun picker · TO-07345 · vehicle KA52B7406",
-            "Internal Transfer 1/2 - created by anjaneyappa.s@home-run.co"
-        ]
-    })
-
-if df is not None:
-    # 1. Map standard columns flexible to naming variations
-    col_map = {
-        'To Location Name': 'DS Name', 'To Location': 'DS Name', 'DS Name': 'DS Name',
-        'Transfer Order#': 'Dispatched TO', 'Transfer Order': 'Dispatched TO', 'TO Number': 'Dispatched TO',
-        'Quantity Transferred': 'Sent Qty', 'Dispatched Qty': 'Sent Qty', 'Quantity': 'Sent Qty'
+    column_mapping = {
+        'DS Name': 'DS Name', 'To Location Name': 'DS Name', 'To Location': 'DS Name',
+        'Quantity Transferred': 'Dispatched Qty', 'Dispatched Qty': 'Dispatched Qty', 
+        'Sent Qty': 'Dispatched Qty', 'Quantity': 'Dispatched Qty',
+        'Transfer Order#': 'TO Number', 'Transfer Order': 'TO Number', 'TO Number': 'TO Number',
+        'TO Qty': 'TO Qty', 'Required Qty': 'TO Qty', 'Quantity Required': 'TO Qty',
+        'Qty Received (as per DS)': 'Qty Received', 'Qty Received': 'Qty Received'
     }
-    
-    for old_col, new_col in col_map.items():
-        if old_col in df.columns:
-            df.rename(columns={old_col: new_col}, inplace=True)
 
-    # Clean Date formatting
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna(df['Date'])
-    else:
-        df['Date'] = ""
+    new_cols = {}
+    for col in df.columns:
+        col_lower = col.strip().lower()
+        for key, val in column_mapping.items():
+            if col_lower == key.lower():
+                new_cols[col] = val
+                break
+            
+    return df.rename(columns=new_cols)
 
-    # Ensure numeric sent quantity
-    df['Sent Qty'] = pd.to_numeric(df['Sent Qty'], errors='coerce').fillna(0)
+# --- INPUT HANDLING ---
+if input_method == "📁 Upload Excel Workbook":
+    uploaded_file = st.sidebar.file_uploader("Upload Excel File (.xlsx)", type=["xlsx", "xls", "csv"])
 
-    # 2. Extract Draft TO Raised (1-2 PM) from Reason column if available
-    if 'Reason' in df.columns:
-        def extract_draft_to(reason):
-            match = re.search(r'TO-\d+', str(reason))
-            return match.group(0) if match else "Direct / Manual"
-        df['Draft TO Raised (1-2 PM)'] = df['Reason'].apply(extract_draft_to)
-    else:
-        df['Draft TO Raised (1-2 PM)'] = df['Dispatched TO']
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith('.csv'):
+            df_single = pd.read_csv(uploaded_file)
+            df_dict["Main Data"] = standardize_columns(df_single)
+        else:
+            excel_file = pd.ExcelFile(uploaded_file)
+            for sheet_name in excel_file.sheet_names:
+                df_sheet = pd.read_excel(excel_file, sheet_name=sheet_name)
+                df_dict[sheet_name] = standardize_columns(df_sheet)
 
-    # 3. Aggregate SKU-level rows into single TO totals
-    grouped = df.groupby(['Date', 'DS Name', 'Draft TO Raised (1-2 PM)', 'Dispatched TO'], as_index=False).agg({
-        'Sent Qty': 'sum'
-    })
+elif input_method == "📋 Copy-Paste Raw Data":
+    paste_data = st.text_area("Paste Raw Data Below (Tab-Separated from Excel)", height=200)
+    if paste_data.strip():
+        try:
+            try:
+                df_paste = pd.read_csv(io.StringIO(paste_data), sep="\t")
+                if len(df_paste.columns) <= 1:
+                    df_paste = pd.read_csv(io.StringIO(paste_data), sep=",")
+            except:
+                df_paste = pd.read_csv(io.StringIO(paste_data), sep=",")
+            df_dict["Pasted Data"] = standardize_columns(df_paste)
+        except Exception as e:
+            st.error(f"Error reading pasted data: {e}")
 
-    # 4. Calculate DS-level Totals
-    ds_summary = grouped.groupby('DS Name').agg(
-        Total_Sent_Qty=('Sent Qty', 'sum'),
-        TO_Count=('Dispatched TO', 'nunique')
-    ).reset_index()
+# --- DASHBOARD RENDERING ---
+if df_dict:
+    # Navigation tabs for multiple sheets
+    selected_sheet = st.sidebar.selectbox("📖 Select Sheet View:", options=list(df_dict.keys()))
 
-    # Map totals for multi-TO dispatches per DS
-    grouped['Is_First'] = ~grouped.duplicated(subset=['DS Name'], keep='first')
-    ds_totals_map = dict(zip(ds_summary['DS Name'], ds_summary['Total_Sent_Qty']))
-    
-    grouped['DS Total Sent Qty Raw'] = grouped['DS Name'].map(ds_totals_map)
-    grouped['DS Total Sent Qty'] = grouped.apply(
-        lambda r: f"{int(r['DS Total Sent Qty Raw']):,}" if r['Is_First'] else "", axis=1
-    )
+    df_current = df_dict[selected_sheet].copy()
 
-    # 5. Format Top Metric Cards
-    tot_sent = grouped['Sent Qty'].sum()
-    tot_ds_count = grouped['DS Name'].nunique()
-    tot_tos_count = grouped['Dispatched TO'].nunique()
+    st.subheader(f"📊 View: {selected_sheet}")
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Dark Stores", f"{tot_ds_count}")
-    m2.metric("Total Dispatched TOs", f"{tot_tos_count}")
-    m3.metric("Total Sent / In-Transit Qty", f"{tot_sent:,}")
+    # Check if the selected sheet is a Review / Summary sheet
+    if any(k in selected_sheet.lower() for k in ["review", "summary", "main"]):
+        
+        # Display Metric Cards if standard columns exist
+        if 'Dispatched Qty' in df_current.columns and 'TO Qty' in df_current.columns:
+            tot_to_qty = pd.to_numeric(df_current['TO Qty'], errors='coerce').sum()
+            tot_dispatch = pd.to_numeric(df_current['Dispatched Qty'], errors='coerce').sum()
+            tot_unsent = tot_to_qty - tot_dispatch
+            overall_fill_rate = (tot_dispatch / tot_to_qty) * 100 if tot_to_qty > 0 else 0
 
-    st.markdown("---")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total TO Requested", f"{int(tot_to_qty):,}")
+            m2.metric("Total Dispatched", f"{int(tot_dispatch):,}")
+            m3.metric("Total Unsent Qty", f"{int(tot_unsent):,}")
+            m4.metric("DC Fill Rate", f"{overall_fill_rate:.1f}%")
 
-    col_h, col_b = st.columns([4, 1])
-    with col_h:
-        st.subheader("📋 Dark Store Transfer Summary")
-    with col_b:
-        csv_data = grouped.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Export CSV", data=csv_data, file_name="single_file_reconciliation.csv", mime="text/csv", use_container_width=True)
+            st.markdown("---")
 
-    # 6. Bottom Total Row
-    total_row = pd.DataFrame([{
-        "Date": "",
-        "DS Name": "TOTAL",
-        "Draft TO Raised (1-2 PM)": "",
-        "Dispatched TO": "TOTAL",
-        "Sent Qty": tot_sent,
-        "DS Total Sent Qty": f"{tot_sent:,}"
-    }])
-
-    cols_order = ["Date", "DS Name", "Draft TO Raised (1-2 PM)", "Dispatched TO", "Sent Qty", "DS Total Sent Qty"]
-    final_table = pd.concat([grouped[cols_order], total_row[cols_order]], ignore_index=True)
-
-    # Display Table
+    # Clean display dataframe
     st.dataframe(
-        final_table,
+        df_current.dropna(how='all'),
         use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Sent Qty": st.column_config.NumberColumn("Sent Qty (per TO)", alignment="right"),
-            "DS Total Sent Qty": st.column_config.TextColumn("Total In-Transit Qty (per DS)", alignment="right"),
-        }
+        hide_index=True
     )
+
+    # Export Option
+    csv_data = df_current.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Export Current Sheet CSV", data=csv_data, file_name=f"{selected_sheet}.csv", mime="text/csv")
 
 else:
-    st.info("👈 Please upload your Transfer Order file in the sidebar to view the report.")
+    st.info("👈 Please upload your Excel workbook or paste data in the sidebar to get started.")
