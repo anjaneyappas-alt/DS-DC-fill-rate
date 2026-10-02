@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import re
 
-st.set_page_config(page_title="Transfer Reconciliation", layout="wide")
+st.set_page_config(page_title="DS Transfer Reconciliation", layout="wide")
 
 st.title("📦 DC to Dark Store Transfer Reconciliation")
 
@@ -21,8 +22,7 @@ def standardize_columns(df):
         'Quantity Transferred': 'Dispatched Qty', 'Dispatched Qty': 'Dispatched Qty', 
         'Sent Qty': 'Dispatched Qty', 'Quantity': 'Dispatched Qty',
         'Transfer Order#': 'TO Number', 'Transfer Order': 'TO Number', 'TO Number': 'TO Number',
-        'TO Qty': 'TO Qty', 'Required Qty': 'TO Qty', 'Quantity Required': 'TO Qty',
-        'Qty Received': 'Qty Received (as per DS)', 'Qty Received (as per DS)': 'Qty Received (as per DS)'
+        'TO Qty': 'TO Qty', 'Required Qty': 'TO Qty', 'Quantity Required': 'TO Qty'
     }
 
     new_cols = {}
@@ -60,149 +60,120 @@ df_dispatch = None
 if input_method == "📋 Copy-Paste Data":
     col_a, col_b = st.columns(2)
     with col_a:
-        paste_to = st.text_area("Paste TO Raised Data", height=180)
+        paste_to = st.text_area("Paste TO Raised Data (Draft 1-2 PM)", height=180)
         df_to = parse_pasted_data(paste_to)
     with col_b:
-        paste_dispatch = st.text_area("Paste Dispatch Data", height=180)
+        paste_dispatch = st.text_area("Paste Transfer Order / Dispatch Data", height=180)
         df_dispatch = parse_pasted_data(paste_dispatch)
 
 elif input_method == "📁 Upload Files":
-    file_to = st.sidebar.file_uploader("1. TO Raised File", type=["csv", "xlsx"])
-    file_dispatch = st.sidebar.file_uploader("2. TO Picked File", type=["csv", "xlsx"])
+    file_to = st.sidebar.file_uploader("1. TO Raised File (Draft 1-2 PM)", type=["csv", "xlsx"])
+    file_dispatch = st.sidebar.file_uploader("2. TO Picked / Dispatch File", type=["csv", "xlsx"])
     if file_to and file_dispatch:
         df_to = load_file(file_to)
         df_dispatch = load_file(file_dispatch)
 
 else:  # Demo Data
     df_to = pd.DataFrame({
-        "Date": ["26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026"],
-        "DS Name": ["DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS04 Chikkabanavara", "DS05 Basavanapura", "DS06 Kogilu"],
-        "TO Qty": [1015, 397, 420, 480, 278, 402]
+        "DS Name": ["DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS05 Basavanapura", "DS06 Kogilu", "DS07 HAL", "DS08 Rajajinagar"],
+        "TO Qty": [1015, 601, 800, 188, 520, 402, 576, 126]
     })
     
     df_dispatch = pd.DataFrame({
-        "Date": ["26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026", "26/7/2026"],
-        "TO Number": ["TO-02078", "TO-02080", "TO-02088", "TO-02086", "TO-02082", "TO-02089", "TO-02084", "TO-02087", "TO-02090"],
-        "DS Name": ["DS01 Sarjapur", "DS01 Sarjapur", "DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS03 Kengeri", "DS04 Chikkabanavara", "DS05 Basavanapura", "DS06 Kogilu"],
-        "Dispatched Qty": [206, 730, 38, 361, 158, 216, 428, 251, 366],
-        "Qty Received (as per DS)": [206, 730, 38, 361, 158, 216, 428, 251, 366]
+        "Date": ["2026-10-02"] * 8,
+        "TO Number": ["TO-07369", "TO-07370", "TO-07361", "TO-07360", "TO-07368", "TO-07371", "TO-07364", "TO-07387"],
+        "DS Name": ["DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS05 Basavanapura", "DS06 Kogilu", "DS07 HAL", "DS08 Rajajinagar"],
+        "Dispatched Qty": [557, 601, 774, 188, 520, 172, 576, 126],
+        "Reason": ["HomeRun picker · TO-07333 · vehicle KA01AP5507", "HomeRun picker · TO-07334 · vehicle KA52A0811", "HomeRun picker · TO-07335 · vehicle KA52B0355", "Internal Transfer", "HomeRun picker · TO-07337 · vehicle KA02AN1565", "HomeRun picker · TO-07338 · vehicle KA03AN0421", "HomeRun picker · TO-07345 · vehicle KA52B7406", "Internal Transfer"]
     })
 
 # --- RECONCILIATION PROCESSING ---
 if df_to is not None and df_dispatch is not None:
     
-    # Clean Date formatting (Remove 00:00:00 timestamp)
-    if 'Date' in df_dispatch.columns:
-        df_dispatch['Date'] = pd.to_datetime(df_dispatch['Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna(df_dispatch['Date'])
+    # Extract Draft TO Number
+    if 'Reason' in df_dispatch.columns:
+        def extract_draft_to(reason):
+            match = re.search(r'TO-\d+', str(reason))
+            return match.group(0) if match else "Direct / Manual"
+        df_dispatch['Draft TO (1-2 PM)'] = df_dispatch['Reason'].apply(extract_draft_to)
+    else:
+        df_dispatch['Draft TO (1-2 PM)'] = df_dispatch['TO Number']
 
-    # Standardize column mappings if needed
-    if 'DS Name' not in df_dispatch.columns and 'To Location Name' in df_dispatch.columns:
-        df_dispatch.rename(columns={'To Location Name': 'DS Name'}, inplace=True)
-    if 'Dispatched Qty' not in df_dispatch.columns and 'Quantity Transferred' in df_dispatch.columns:
-        df_dispatch.rename(columns={'Quantity Transferred': 'Dispatched Qty'}, inplace=True)
+    grouped_dispatch = df_dispatch.groupby(['Date', 'TO Number', 'DS Name', 'Draft TO (1-2 PM)'], as_index=False).agg({
+        'Dispatched Qty': 'sum'
+    })
 
-    if 'DS Name' in df_dispatch.columns and 'Dispatched Qty' in df_dispatch.columns:
-        
-        # Numeric conversions
-        df_dispatch['Dispatched Qty'] = pd.to_numeric(df_dispatch['Dispatched Qty'], errors='coerce').fillna(0)
-        
-        if 'Qty Received (as per DS)' in df_dispatch.columns:
-            df_dispatch['Qty Received (as per DS)'] = pd.to_numeric(df_dispatch['Qty Received (as per DS)'], errors='coerce').fillna(0)
-        else:
-            df_dispatch['Qty Received (as per DS)'] = df_dispatch['Dispatched Qty']
+    if 'TO Qty' in df_to.columns:
+        df_to['TO Qty'] = pd.to_numeric(df_to['TO Qty'], errors='coerce').fillna(0)
+        ds_totals = df_to.groupby('DS Name')['TO Qty'].sum().reset_index()
+    else:
+        ds_totals = pd.DataFrame(df_to['DS Name'].unique(), columns=['DS Name'])
+        ds_totals['TO Qty'] = 0
 
-        # --- FIX 1: AGGREGATE DUPLICATE SKU ROWS INTO TO-LEVEL TOTALS ---
-        grouped_dispatch = df_dispatch.groupby(['Date', 'TO Number', 'DS Name'], as_index=False).agg({
-            'Dispatched Qty': 'sum',
-            'Qty Received (as per DS)': 'sum'
-        })
+    merged_df = pd.merge(grouped_dispatch, ds_totals, on='DS Name', how='left')
 
-        # Calculate TO Fill Rate per TO Number
-        grouped_dispatch['TO Fill Rate'] = np.where(
-            grouped_dispatch['Dispatched Qty'] > 0,
-            (grouped_dispatch['Qty Received (as per DS)'] / grouped_dispatch['Dispatched Qty']) * 100,
-            100
-        )
-        grouped_dispatch['TO Fill Rate'] = grouped_dispatch['TO Fill Rate'].apply(lambda x: f"{int(x)}%")
+    ds_dispatch_totals = merged_df.groupby('DS Name').agg(
+        Total_Dispatched=('Dispatched Qty', 'sum')
+    ).reset_index()
 
-        # --- FIX 2: CALCULATE TOTAL REQUESTED QTY PER DS FROM TO RAISED FILE ---
-        if 'TO Qty' in df_to.columns:
-            df_to['TO Qty'] = pd.to_numeric(df_to['TO Qty'], errors='coerce').fillna(0)
-            ds_totals = df_to.groupby('DS Name')['TO Qty'].sum().reset_index()
-        elif 'Dispatched Qty' in df_to.columns:
-            df_to['Dispatched Qty'] = pd.to_numeric(df_to['Dispatched Qty'], errors='coerce').fillna(0)
-            ds_totals = df_to.groupby('DS Name')['Dispatched Qty'].sum().reset_index().rename(columns={'Dispatched Qty': 'TO Qty'})
-        else:
-            ds_totals = pd.DataFrame(df_to['DS Name'].unique(), columns=['DS Name'])
-            ds_totals['TO Qty'] = 0
+    ds_totals = pd.merge(ds_totals, ds_dispatch_totals, on='DS Name', how='left')
+    ds_totals['Unsent Qty'] = ds_totals['TO Qty'] - ds_totals['Total_Dispatched']
+    ds_totals['DC TO Fill rate'] = np.where(ds_totals['TO Qty'] > 0, (ds_totals['Total_Dispatched'] / ds_totals['TO Qty']) * 100, 0)
 
-        # Merge Dark Store total TO Qty into grouped dispatch summary
-        merged_df = pd.merge(grouped_dispatch, ds_totals, on='DS Name', how='left')
+    merged_df['Is_First'] = ~merged_df.duplicated(subset=['DS Name'], keep='first')
+    unsent_map = dict(zip(ds_totals['DS Name'], ds_totals['Unsent Qty']))
+    dc_fill_map = dict(zip(ds_totals['DS Name'], ds_totals['DC TO Fill rate']))
 
-        # Total Dispatched Qty per DS across vehicles
-        ds_dispatch_totals = merged_df.groupby('DS Name').agg(
-            Total_Dispatched=('Dispatched Qty', 'sum')
-        ).reset_index()
+    merged_df['Unsent Qty Raw'] = merged_df['DS Name'].map(unsent_map)
+    merged_df['DC TO Fill rate raw'] = merged_df['DS Name'].map(dc_fill_map)
 
-        ds_totals = pd.merge(ds_totals, ds_dispatch_totals, on='DS Name', how='left')
-        ds_totals['DC TO Fill rate'] = np.where(ds_totals['TO Qty'] > 0, (ds_totals['Total_Dispatched'] / ds_totals['TO Qty']) * 100, 0)
+    table_df = merged_df.copy()
+    table_df['TO Qty'] = table_df.apply(lambda r: f"{int(r['TO Qty']):,}" if r['Is_First'] and pd.notnull(r['TO Qty']) and r['TO Qty'] != 0 else "", axis=1)
+    table_df['Unsent Qty'] = table_df.apply(lambda r: f"{int(r['Unsent Qty Raw']):,}" if r['Is_First'] and pd.notnull(r['Unsent Qty Raw']) else "", axis=1)
+    table_df['DC TO Fill rate'] = table_df.apply(lambda r: f"{r['DC TO Fill rate raw']:.0f}%" if r['Is_First'] and pd.notnull(r['DC TO Fill rate raw']) else "", axis=1)
+    table_df['TO Fill Rate'] = "100%"
 
-        # Blank out duplicate DS entries for clean view
-        merged_df['Is_First'] = ~merged_df.duplicated(subset=['DS Name'], keep='first')
-        dc_fill_map = dict(zip(ds_totals['DS Name'], ds_totals['DC TO Fill rate']))
+    tot_to_qty = ds_totals['TO Qty'].sum()
+    tot_dispatch = grouped_dispatch['Dispatched Qty'].sum()
+    tot_unsent = tot_to_qty - tot_dispatch
+    overall_fill_rate = (tot_dispatch / tot_to_qty) * 100 if tot_to_qty > 0 else 0
 
-        merged_df['DC TO Fill rate raw'] = merged_df['DS Name'].map(dc_fill_map)
+    # Summary Alert Box for Large Unsent Quantities
+    if tot_unsent > 0:
+        st.warning(f"⚠️ **Unsent Quantity Alert:** Total **{tot_unsent:,} units** were requested but not dispatched across the Dark Stores (DC Fill Rate: **{overall_fill_rate:.1f}%**).")
 
-        table_df = merged_df.copy()
-        table_df['TO Qty'] = table_df.apply(lambda r: f"{int(r['TO Qty']):,}" if r['Is_First'] and pd.notnull(r['TO Qty']) and r['TO Qty'] != 0 else "", axis=1)
-        table_df['DC TO Fill rate'] = table_df.apply(lambda r: f"{r['DC TO Fill rate raw']:.0f}%" if r['Is_First'] and pd.notnull(r['DC TO Fill rate raw']) else "", axis=1)
-        
-        # Populate missing columns
-        table_df['Short Quantity'] = ""
-        table_df['Damaged'] = ""
-        table_df['Remarks'] = ""
+    total_row = pd.DataFrame([{
+        "Date": "",
+        "Draft TO (1-2 PM)": "",
+        "TO Number": "TOTAL",
+        "DS Name": "",
+        "TO Qty": f"{tot_to_qty:.0f}",
+        "Dispatched Qty": tot_dispatch,
+        "Unsent Qty": f"{tot_unsent:.0f}",
+        "TO Fill Rate": "100%",
+        "DC TO Fill rate": f"{overall_fill_rate:.0f}%"
+    }])
 
-        # Bottom Total Row
-        tot_to_qty = ds_totals['TO Qty'].sum()
-        tot_dispatch = grouped_dispatch['Dispatched Qty'].sum()
-        tot_received = grouped_dispatch['Qty Received (as per DS)'].sum()
-        overall_fill_rate = (tot_dispatch / tot_to_qty) * 100 if tot_to_qty > 0 else 0
+    cols_order = [
+        "Date", "Draft TO (1-2 PM)", "TO Number", "DS Name", "TO Qty", 
+        "Dispatched Qty", "Unsent Qty", "TO Fill Rate", "DC TO Fill rate"
+    ]
 
-        total_row = pd.DataFrame([{
-            "Date": "",
-            "TO Number": "0",
-            "DS Name": "",
-            "TO Qty": f"{tot_to_qty:.0f}",
-            "Dispatched Qty": tot_dispatch,
-            "Qty Received (as per DS)": tot_received,
-            "Short Quantity": "",
-            "Damaged": "",
-            "TO Fill Rate": "100%",
-            "DC TO Fill rate": f"{overall_fill_rate:.0f}%",
-            "Remarks": ""
-        }])
+    final_display = pd.concat([table_df[cols_order], total_row[cols_order]], ignore_index=True)
 
-        cols_order = [
-            "Date", "TO Number", "DS Name", "TO Qty", "Dispatched Qty", 
-            "Qty Received (as per DS)", "Short Quantity", "Damaged", 
-            "TO Fill Rate", "DC TO Fill rate", "Remarks"
-        ]
-
-        final_display = pd.concat([table_df[cols_order], total_row[cols_order]], ignore_index=True)
-
-        st.markdown("---")
-        
-        st.dataframe(
-            final_display,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "TO Qty": st.column_config.TextColumn(alignment="right"),
-                "Dispatched Qty": st.column_config.NumberColumn(alignment="right"),
-                "Qty Received (as per DS)": st.column_config.NumberColumn(alignment="right"),
-                "TO Fill Rate": st.column_config.TextColumn(alignment="center"),
-                "DC TO Fill rate": st.column_config.TextColumn(alignment="center"),
-            }
-        )
+    st.markdown("---")
+    
+    st.dataframe(
+        final_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "TO Qty": st.column_config.TextColumn("TO Raised Qty", alignment="right"),
+            "Dispatched Qty": st.column_config.NumberColumn("Sent Qty", alignment="right"),
+            "Unsent Qty": st.column_config.TextColumn("Unsent Qty", alignment="right"),
+            "TO Fill Rate": st.column_config.TextColumn(alignment="center"),
+            "DC TO Fill rate": st.column_config.TextColumn(alignment="center"),
+        }
+    )
 else:
     st.info("👈 Please enter data or select demo mode in the sidebar to generate the report.")
