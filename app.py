@@ -40,12 +40,11 @@ st.markdown("""
         padding: 8px 12px;
         color: #000000;
     }
-    .custom-table tr.subtotal-row td {
-        background-color: #F3F4F6 !important;
-        color: #000000 !important;
-        font-weight: bold !important;
-        border-top: 1.5px solid #9CA3AF;
-        border-bottom: 1.5px solid #9CA3AF;
+    .custom-table tr:nth-child(even) td {
+        background-color: #F9FAFB;
+    }
+    .custom-table tr:nth-child(odd) td {
+        background-color: #FFFFFF;
     }
     .custom-table tr.total-row td {
         background-color: #F8B486 !important;
@@ -96,7 +95,7 @@ def classify_row_reason(reason_str, item_name_str=""):
         
     return reason_str if reason_str else "PLY"
 
-def generate_styled_excel(rows_list, grand_total):
+def generate_styled_excel(df, grand_total):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sent_Summary"
@@ -104,21 +103,19 @@ def generate_styled_excel(rows_list, grand_total):
     headers = ["date", "DS", "TO", "reson", "qty"]
     ws.append(headers)
 
-    for row in rows_list:
-        ws.append([row['date'], row['DS'], row['TO'], row['reson'], row['qty']])
+    for row in df.itertuples(index=False):
+        ws.append([row.date, row.DS, row.TO, row.reson, row.qty])
 
     # Grand Total Row
     ws.append(["Total", "", "", "Total Dispatched Qty", grand_total])
 
     font_header = Font(name="Arial", size=11, bold=True, color="000000")
     font_body = Font(name="Arial", size=10, color="000000")
-    font_subtotal = Font(name="Arial", size=10, bold=True, color="000000")
     font_total = Font(name="Arial", size=11, bold=True, color="000000")
 
     fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
     fill_even = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
     fill_odd = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-    fill_subtotal = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
     fill_total = PatternFill(start_color="F8B486", end_color="F8B486", fill_type="solid")
 
     thin_border = Border(
@@ -137,13 +134,11 @@ def generate_styled_excel(rows_list, grand_total):
 
     max_row = ws.max_row
     for row_num in range(2, max_row):
-        is_subtotal = ws.cell(row=row_num, column=4).value == "Sub-Total Qty"
-        fill = fill_subtotal if is_subtotal else (fill_even if row_num % 2 == 0 else fill_odd)
-        font = font_subtotal if is_subtotal else font_body
+        fill = fill_even if row_num % 2 == 0 else fill_odd
 
         for col_num in range(1, 6):
             cell = ws.cell(row=row_num, column=col_num)
-            cell.font = font
+            cell.font = font_body
             cell.fill = fill
             cell.border = thin_border
             if col_num in [1, 3]:
@@ -212,7 +207,6 @@ if df is not None:
     dc_df = df[df['From Location Name'].astype(str).str.contains('DC', na=False) & df['To Location Name'].astype(str).str.contains('DS', na=False)].copy()
     sent_df = dc_df[dc_df['Status'].astype(str).str.lower().isin(['transferred', 'in transit'])].copy()
 
-    # Pass both Reason and Item Name to classify accurately
     if 'Item Name' not in sent_df.columns:
         sent_df['Item Name'] = ""
 
@@ -225,36 +219,17 @@ if df is not None:
     grouped['date'] = pd.to_datetime(grouped['Date'], errors='coerce').dt.strftime('%d-%b')
     grouped.sort_values(by=['To Location Name', 'Transfer Order#'], inplace=True)
 
-    final_table_rows = []
-    grand_total_qty = 0
-    total_to_count = len(grouped)
+    # Visual Grouping (Blank duplicate Date & DS names)
+    grouped['Is_First_DS'] = ~grouped.duplicated(subset=['To Location Name'], keep='first')
 
-    for ds_name, ds_group in grouped.groupby('To Location Name', sort=False):
-        ds_subtotal = ds_group['Qty'].sum()
-        grand_total_qty += ds_subtotal
-        
-        first = True
-        for row in ds_group.itertuples():
-            date_val = row.date if first else ""
-            ds_val = row._2 if first else ""
-            final_table_rows.append({
-                "date": date_val,
-                "DS": ds_val,
-                "TO": row._3,
-                "reson": row.clean_reason,
-                "qty": row.Qty,
-                "is_subtotal": False
-            })
-            first = False
-            
-        final_table_rows.append({
-            "date": "",
-            "DS": f"{ds_name} Total",
-            "TO": "",
-            "reson": "Sub-Total Qty",
-            "qty": ds_subtotal,
-            "is_subtotal": True
-        })
+    grouped['display_date'] = grouped.apply(lambda r: r['date'] if r['Is_First_DS'] else "", axis=1)
+    grouped['display_ds'] = grouped.apply(lambda r: r['To Location Name'] if r['Is_First_DS'] else "", axis=1)
+
+    result_df = grouped[['display_date', 'display_ds', 'Transfer Order#', 'clean_reason', 'Qty']].copy()
+    result_df.columns = ['date', 'DS', 'TO', 'reson', 'qty']
+
+    grand_total_qty = result_df['qty'].sum()
+    total_to_count = len(result_df)
 
     m1, m2 = st.columns(2)
     m1.metric("Total Dispatched Quantity", f"{int(grand_total_qty):,}")
@@ -266,19 +241,15 @@ if df is not None:
     with col_h:
         st.subheader("📋 Dispatched Quantity Table")
     with col_b1:
-        export_df = pd.DataFrame(final_table_rows)[['date', 'DS', 'TO', 'reson', 'qty']]
-        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        csv_data = result_df.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Download CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
     with col_b2:
-        excel_bytes = generate_styled_excel(final_table_rows, grand_total_qty)
+        excel_bytes = generate_styled_excel(result_df, grand_total_qty)
         st.download_button("📥 Download Excel", data=excel_bytes, file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
     html_rows = ""
-    for r in final_table_rows:
-        if r['is_subtotal']:
-            html_rows += f"<tr class='subtotal-row'><td></td><td style='font-weight: bold;'>{r['DS']}</td><td></td><td style='font-weight: bold;'>{r['reson']}</td><td style='text-align: right; font-weight: bold;'>{int(r['qty']):,}</td></tr>"
-        else:
-            html_rows += f"<tr><td style='text-align: center;'>{r['date']}</td><td style='text-align: left; font-weight: bold;'>{r['DS']}</td><td style='text-align: center;'>{r['TO']}</td><td style='text-align: left;'>{r['reson']}</td><td style='text-align: right;'>{int(r['qty']):,}</td></tr>"
+    for idx, row in result_df.iterrows():
+        html_rows += f"<tr><td style='text-align: center;'>{row['date']}</td><td style='text-align: left; font-weight: bold;'>{row['DS']}</td><td style='text-align: center;'>{row['TO']}</td><td style='text-align: left;'>{row['reson']}</td><td style='text-align: right;'>{int(row['qty']):,}</td></tr>"
 
     html_rows += f"<tr class='total-row'><td style='text-align: left;'>Total</td><td></td><td></td><td style='text-align: left;'>Total Dispatched Qty</td><td style='text-align: right;'>{int(grand_total_qty):,}</td></tr>"
 
