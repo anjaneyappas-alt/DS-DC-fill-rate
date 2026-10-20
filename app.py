@@ -3,13 +3,14 @@ import pandas as pd
 import numpy as np
 import io
 import re
+import textwrap
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="DS Transfer Summary", layout="wide")
 
-# Custom CSS for Light Grey Header, White/Grey Alternating Rows, and Orange Total Row
+# Theme Styling
 st.markdown("""
     <style>
     .stApp {
@@ -17,11 +18,10 @@ st.markdown("""
         color: #FFFFFF;
     }
     
-    /* Table Styling */
     .custom-table {
         width: 100%;
         border-collapse: collapse;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: Arial, sans-serif;
         font-size: 14px;
         color: #000000;
         margin-top: 15px;
@@ -104,10 +104,8 @@ def generate_styled_excel(df, total_qty):
     for row in df.itertuples(index=False):
         ws.append([row.date, row.DS, row.TO, row.reson, row.qty])
 
-    # Total Row
     ws.append(["Total", "", "", "Total Dispatched Qty", total_qty])
 
-    # Styling definitions
     font_header = Font(name="Arial", size=11, bold=True, color="000000")
     font_body = Font(name="Arial", size=10, color="000000")
     font_total = Font(name="Arial", size=11, bold=True, color="000000")
@@ -124,7 +122,6 @@ def generate_styled_excel(df, total_qty):
         bottom=Side(style='thin', color='D1D5DB')
     )
 
-    # Format Headers
     for col_num in range(1, 6):
         cell = ws.cell(row=1, column=col_num)
         cell.font = font_header
@@ -132,7 +129,6 @@ def generate_styled_excel(df, total_qty):
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = thin_border
 
-    # Format Body Rows
     max_row = ws.max_row
     for row_num in range(2, max_row):
         fill = fill_even if row_num % 2 == 0 else fill_odd
@@ -149,7 +145,6 @@ def generate_styled_excel(df, total_qty):
             else:
                 cell.alignment = Alignment(horizontal="left")
 
-    # Format Total Row
     for col_num in range(1, 6):
         cell = ws.cell(row=max_row, column=col_num)
         cell.font = font_total
@@ -161,7 +156,6 @@ def generate_styled_excel(df, total_qty):
         elif col_num in [1, 4]:
             cell.alignment = Alignment(horizontal="left")
 
-    # Column Widths
     for col in ws.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
         col_letter = get_column_letter(col[0].column)
@@ -235,47 +229,17 @@ if df is not None:
         excel_bytes = generate_styled_excel(result_df, total_qty)
         st.download_button("📥 Download Excel", data=excel_bytes, file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Render Styled Table (Light Grey Header, White/Grey Alternating Rows, Orange Total Row)
+    # Build HTML string without indents
     html_rows = ""
     for idx, row in result_df.iterrows():
-        html_rows += f"""
-        <tr>
-            <td style="text-align: center;">{row['date']}</td>
-            <td style="text-align: left; font-weight: bold;">{row['DS']}</td>
-            <td style="text-align: center;">{row['TO']}</td>
-            <td style="text-align: left;">{row['reson']}</td>
-            <td style="text-align: right; font-weight: 500;">{int(row['qty']):,}</td>
-        </tr>
-        """
+        html_rows += f"<tr><td style='text-align: center;'>{row['date']}</td><td style='text-align: left; font-weight: bold;'>{row['DS']}</td><td style='text-align: center;'>{row['TO']}</td><td style='text-align: left;'>{row['reson']}</td><td style='text-align: right; font-weight: 500;'>{int(row['qty']):,}</td></tr>"
 
-    html_rows += f"""
-    <tr class="total-row">
-        <td style="text-align: left;">Total</td>
-        <td></td>
-        <td></td>
-        <td style="text-align: left;">Total Dispatched Qty</td>
-        <td style="text-align: right;">{int(total_qty):,}</td>
-    </tr>
-    """
+    html_rows += f"<tr class='total-row'><td style='text-align: left;'>Total</td><td></td><td></td><td style='text-align: left;'>Total Dispatched Qty</td><td style='text-align: right;'>{int(total_qty):,}</td></tr>"
 
-    table_html = f"""
-    <table class="custom-table">
-        <thead>
-            <tr>
-                <th style="width: 12%;">date</th>
-                <th style="width: 20%;">DS</th>
-                <th style="width: 18%;">TO</th>
-                <th style="width: 35%;">reson</th>
-                <th style="width: 15%;">qty</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_rows}
-        </tbody>
-    </table>
-    """
+    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 12%;">date</th><th style="width: 20%;">DS</th><th style="width: 18%;">TO</th><th style="width: 35%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
 
-    st.markdown(table_html, unsafe_allow_html=True)
+    # Unindented markdown to guarantee proper table rendering
+    st.markdown(textwrap.dedent(raw_html), unsafe_allow_html=True)
 
 else:
     st.info("👈 Please upload your Transfer Order file in the sidebar.")
