@@ -3,28 +3,68 @@ import pandas as pd
 import numpy as np
 import io
 import re
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
-st.set_page_config(page_title="DS Sent Qty Summary", layout="wide")
+st.set_page_config(page_title="DS Transfer Summary", layout="wide")
 
-# White background & clear text styling
+# Custom CSS for Light Grey Header, White/Grey Alternating Rows, and Orange Total Row
 st.markdown("""
     <style>
     .stApp {
+        background-color: #0E1117;
+        color: #FFFFFF;
+    }
+    
+    /* Table Styling */
+    .custom-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 14px;
+        color: #000000;
+        margin-top: 15px;
         background-color: #FFFFFF;
+    }
+    .custom-table th {
+        background-color: #EAEAEA !important;
+        color: #000000 !important;
+        font-weight: bold;
+        border: 1px solid #D1D5DB;
+        text-align: center;
+        padding: 10px;
+    }
+    .custom-table td {
+        border: 1px solid #E5E7EB;
+        padding: 8px 12px;
         color: #000000;
     }
+    .custom-table tr:nth-child(even) td {
+        background-color: #F9FAFB;
+    }
+    .custom-table tr:nth-child(odd) td {
+        background-color: #FFFFFF;
+    }
+    .custom-table tr.total-row td {
+        background-color: #F8B486 !important;
+        color: #000000 !important;
+        font-weight: bold !important;
+        border-top: 2px solid #D97706;
+    }
+    
     div[data-testid="stMetricValue"] {
-        font-size: 32px;
-        color: #9A7B1C;
+        font-size: 30px;
+        color: #F8B486;
         font-weight: bold;
     }
     div[data-testid="stMetricLabel"] {
-        color: #555555;
-        font-weight: bold;
+        color: #E5E7EB;
+        font-weight: 600;
     }
     section[data-testid="stSidebar"] {
-        background-color: #FFF9E6;
-        border-right: 1px solid #E5E7EB;
+        background-color: #1F2937;
+        color: #FFFFFF;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -53,6 +93,84 @@ def transform_reason(reason_str):
         
     return reason_str
 
+def generate_styled_excel(df, total_qty):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sent_Summary"
+
+    headers = ["date", "DS", "TO", "reson", "qty"]
+    ws.append(headers)
+
+    for row in df.itertuples(index=False):
+        ws.append([row.date, row.DS, row.TO, row.reson, row.qty])
+
+    # Total Row
+    ws.append(["Total", "", "", "Total Dispatched Qty", total_qty])
+
+    # Styling definitions
+    font_header = Font(name="Arial", size=11, bold=True, color="000000")
+    font_body = Font(name="Arial", size=10, color="000000")
+    font_total = Font(name="Arial", size=11, bold=True, color="000000")
+
+    fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
+    fill_even = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
+    fill_odd = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    fill_total = PatternFill(start_color="F8B486", end_color="F8B486", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style='thin', color='D1D5DB'),
+        right=Side(style='thin', color='D1D5DB'),
+        top=Side(style='thin', color='D1D5DB'),
+        bottom=Side(style='thin', color='D1D5DB')
+    )
+
+    # Format Headers
+    for col_num in range(1, 6):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+
+    # Format Body Rows
+    max_row = ws.max_row
+    for row_num in range(2, max_row):
+        fill = fill_even if row_num % 2 == 0 else fill_odd
+        for col_num in range(1, 6):
+            cell = ws.cell(row=row_num, column=col_num)
+            cell.font = font_body
+            cell.fill = fill
+            cell.border = thin_border
+            if col_num in [1, 3]:
+                cell.alignment = Alignment(horizontal="center")
+            elif col_num == 5:
+                cell.alignment = Alignment(horizontal="right")
+                cell.number_format = '#,##0'
+            else:
+                cell.alignment = Alignment(horizontal="left")
+
+    # Format Total Row
+    for col_num in range(1, 6):
+        cell = ws.cell(row=max_row, column=col_num)
+        cell.font = font_total
+        cell.fill = fill_total
+        cell.border = thin_border
+        if col_num == 5:
+            cell.alignment = Alignment(horizontal="right")
+            cell.number_format = '#,##0'
+        elif col_num in [1, 4]:
+            cell.alignment = Alignment(horizontal="left")
+
+    # Column Widths
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
 df = None
 
 if uploaded_file is not None:
@@ -79,25 +197,18 @@ elif use_demo:
 if df is not None:
     df.columns = df.columns.astype(str).str.strip()
 
-    # Filter DC to DS transfers
     dc_df = df[df['From Location Name'].astype(str).str.contains('DC', na=False) & df['To Location Name'].astype(str).str.contains('DS', na=False)].copy()
-
-    # Filter dispatches
     sent_df = dc_df[dc_df['Status'].astype(str).str.lower().isin(['transferred', 'in transit'])].copy()
 
-    # Apply Reason Rules
     sent_df['clean_reason'] = sent_df['Reason'].apply(transform_reason)
 
-    # Group by Date, DS, TO Number, Reason
     grouped = sent_df.groupby(['Date', 'To Location Name', 'Transfer Order#', 'clean_reason'], as_index=False).agg(
         Qty=('Quantity Transferred', 'sum')
     )
 
-    # Format Date (DD-Mon)
     grouped['date'] = pd.to_datetime(grouped['Date'], errors='coerce').dt.strftime('%d-%b')
     grouped.sort_values(by=['To Location Name', 'Transfer Order#'], inplace=True)
 
-    # Blank out duplicate Date and DS for clean grouped view
     grouped['Is_First_DS'] = ~grouped.duplicated(subset=['To Location Name'], keep='first')
 
     grouped['display_date'] = grouped.apply(lambda r: r['date'] if r['Is_First_DS'] else "", axis=1)
@@ -106,19 +217,8 @@ if df is not None:
     result_df = grouped[['display_date', 'display_ds', 'Transfer Order#', 'clean_reason', 'Qty']].copy()
     result_df.columns = ['date', 'DS', 'TO', 'reson', 'qty']
 
-    # Total row
     total_qty = result_df['qty'].sum()
-    total_row = pd.DataFrame([{
-        "date": "Total",
-        "DS": "",
-        "TO": "",
-        "reson": "Total Dispatched Qty",
-        "qty": total_qty
-    }])
 
-    final_table = pd.concat([result_df, total_row], ignore_index=True)
-
-    # Metrics Display
     m1, m2 = st.columns(2)
     m1.metric("Total Dispatched Quantity", f"{int(total_qty):,}")
     m2.metric("Total Transfer Orders", f"{len(result_df):,}")
@@ -129,27 +229,53 @@ if df is not None:
     with col_h:
         st.subheader("📋 Dispatched Quantity Table")
     with col_b1:
-        csv_data = final_table.to_csv(index=False).encode('utf-8')
+        csv_data = result_df.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Download CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
     with col_b2:
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            final_table.to_excel(writer, sheet_name="Sent_Summary", index=False)
-        st.download_button("📥 Download Excel", data=buffer.getvalue(), file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        excel_bytes = generate_styled_excel(result_df, total_qty)
+        st.download_button("📥 Download Excel", data=excel_bytes, file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Render Table directly using Streamlit dataframe (100% bug-free rendering)
-    st.dataframe(
-        final_table,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "date": st.column_config.TextColumn("date", width="small"),
-            "DS": st.column_config.TextColumn("DS", width="medium"),
-            "TO": st.column_config.TextColumn("TO", width="medium"),
-            "reson": st.column_config.TextColumn("reson", width="large"),
-            "qty": st.column_config.NumberColumn("qty", alignment="right", format="%d")
-        }
-    )
+    # Render Styled Table (Light Grey Header, White/Grey Alternating Rows, Orange Total Row)
+    html_rows = ""
+    for idx, row in result_df.iterrows():
+        html_rows += f"""
+        <tr>
+            <td style="text-align: center;">{row['date']}</td>
+            <td style="text-align: left; font-weight: bold;">{row['DS']}</td>
+            <td style="text-align: center;">{row['TO']}</td>
+            <td style="text-align: left;">{row['reson']}</td>
+            <td style="text-align: right; font-weight: 500;">{int(row['qty']):,}</td>
+        </tr>
+        """
+
+    html_rows += f"""
+    <tr class="total-row">
+        <td style="text-align: left;">Total</td>
+        <td></td>
+        <td></td>
+        <td style="text-align: left;">Total Dispatched Qty</td>
+        <td style="text-align: right;">{int(total_qty):,}</td>
+    </tr>
+    """
+
+    table_html = f"""
+    <table class="custom-table">
+        <thead>
+            <tr>
+                <th style="width: 12%;">date</th>
+                <th style="width: 20%;">DS</th>
+                <th style="width: 18%;">TO</th>
+                <th style="width: 35%;">reson</th>
+                <th style="width: 15%;">qty</th>
+            </tr>
+        </thead>
+        <tbody>
+            {html_rows}
+        </tbody>
+    </table>
+    """
+
+    st.markdown(table_html, unsafe_allow_html=True)
 
 else:
     st.info("👈 Please upload your Transfer Order file in the sidebar.")
