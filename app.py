@@ -6,57 +6,25 @@ import re
 
 st.set_page_config(page_title="DS Sent Qty Summary", layout="wide")
 
-# Excel Classic Light Yellow (#FFF2CC) Theme Styling
+# White background & clear text styling
 st.markdown("""
     <style>
     .stApp {
         background-color: #FFFFFF;
         color: #000000;
     }
-    
-    /* Excel Header & Grid Styling */
-    .excel-table {
-        border-collapse: collapse;
-        width: 100%;
-        font-family: Arial, sans-serif;
-        font-size: 14px;
-        color: #000000;
-        margin-top: 10px;
-    }
-    .excel-table th {
-        background-color: #FFF2CC !important;
-        color: #000000 !important;
-        font-weight: bold;
-        border: 1px solid #000000;
-        text-align: center;
-        padding: 8px 12px;
-    }
-    .excel-table td {
-        border: 1px solid #000000;
-        padding: 6px 12px;
-        color: #000000;
-    }
-    .excel-table tr:hover {
-        background-color: #F9FAFB;
-    }
-    .total-row {
-        background-color: #FFE699;
-        font-weight: bold;
-    }
-    
-    /* Streamlit Metric Card Styling */
     div[data-testid="stMetricValue"] {
-        font-size: 26px;
-        color: #856404;
+        font-size: 32px;
+        color: #9A7B1C;
         font-weight: bold;
     }
     div[data-testid="stMetricLabel"] {
-        color: #000000;
-        font-weight: 600;
+        color: #555555;
+        font-weight: bold;
     }
     section[data-testid="stSidebar"] {
-        background-color: #FFF2CC;
-        border-right: 1px solid #D6D8DB;
+        background-color: #FFF9E6;
+        border-right: 1px solid #E5E7EB;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -90,7 +58,6 @@ df = None
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
 elif use_demo:
-    # Sample dataset
     df = pd.DataFrame({
         "Date": ["2026-10-10"] * 7,
         "From Location Name": ["DC01 Rampura"] * 7,
@@ -139,8 +106,17 @@ if df is not None:
     result_df = grouped[['display_date', 'display_ds', 'Transfer Order#', 'clean_reason', 'Qty']].copy()
     result_df.columns = ['date', 'DS', 'TO', 'reson', 'qty']
 
-    # Total quantity
+    # Total row
     total_qty = result_df['qty'].sum()
+    total_row = pd.DataFrame([{
+        "date": "Total",
+        "DS": "",
+        "TO": "",
+        "reson": "Total Dispatched Qty",
+        "qty": total_qty
+    }])
+
+    final_table = pd.concat([result_df, total_row], ignore_index=True)
 
     # Metrics Display
     m1, m2 = st.columns(2)
@@ -149,61 +125,31 @@ if df is not None:
 
     st.markdown("---")
 
-    # Action Buttons
     col_h, col_b1, col_b2 = st.columns([3, 1, 1])
     with col_h:
         st.subheader("📋 Dispatched Quantity Table")
     with col_b1:
-        csv_data = result_df.to_csv(index=False).encode('utf-8')
+        csv_data = final_table.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Download CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
     with col_b2:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            result_df.to_excel(writer, sheet_name="Sent_Summary", index=False)
+            final_table.to_excel(writer, sheet_name="Sent_Summary", index=False)
         st.download_button("📥 Download Excel", data=buffer.getvalue(), file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # HTML Table Rendering for Perfect Yellow Header & Grid Theme
-    html_rows = ""
-    for idx, row in result_df.iterrows():
-        html_rows += f"""
-        <tr>
-            <td style="text-align: center;">{row['date']}</td>
-            <td style="text-align: left; font-weight: bold;">{row['DS']}</td>
-            <td style="text-align: center;">{row['TO']}</td>
-            <td style="text-align: left;">{row['reson']}</td>
-            <td style="text-align: right; font-weight: 500;">{int(row['qty']):,}</td>
-        </tr>
-        """
-    
-    # Add Total Row
-    html_rows += f"""
-    <tr class="total-row">
-        <td style="text-align: center;">Total</td>
-        <td></td>
-        <td></td>
-        <td style="text-align: left;">Total Dispatched Qty</td>
-        <td style="text-align: right;">{int(total_qty):,}</td>
-    </tr>
-    """
-
-    full_table_html = f"""
-    <table class="excel-table">
-        <thead>
-            <tr>
-                <th style="width: 12%;">date</th>
-                <th style="width: 20%;">DS</th>
-                <th style="width: 18%;">TO</th>
-                <th style="width: 35%;">reson</th>
-                <th style="width: 15%;">qty</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_rows}
-        </tbody>
-    </table>
-    """
-
-    st.markdown(full_table_html, unsafe_allow_html=True)
+    # Render Table directly using Streamlit dataframe (100% bug-free rendering)
+    st.dataframe(
+        final_table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "date": st.column_config.TextColumn("date", width="small"),
+            "DS": st.column_config.TextColumn("DS", width="medium"),
+            "TO": st.column_config.TextColumn("TO", width="medium"),
+            "reson": st.column_config.TextColumn("reson", width="large"),
+            "qty": st.column_config.NumberColumn("qty", alignment="right", format="%d")
+        }
+    )
 
 else:
     st.info("👈 Please upload your Transfer Order file in the sidebar.")
