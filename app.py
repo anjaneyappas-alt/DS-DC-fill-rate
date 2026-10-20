@@ -6,15 +6,32 @@ import re
 
 st.set_page_config(page_title="DS Sent Qty Reconciliation", layout="wide")
 
-# Custom CSS for Industrial Dashboard Theme
+# White Background & Professional Clean Theme Styling
 st.markdown("""
     <style>
-    .main {
-        background-color: #0E1117;
+    /* Main Background */
+    .stApp {
+        background-color: #FFFFFF;
+        color: #111827;
     }
+    /* Metric Cards Styling */
     div[data-testid="stMetricValue"] {
         font-size: 28px;
-        color: #FACA15;
+        color: #1E3A8A;
+        font-weight: 700;
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #4B5563;
+        font-weight: 600;
+    }
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #F9FAFB;
+        border-right: 1px solid #E5E7EB;
+    }
+    /* Subheaders and Headers */
+    h1, h2, h3, h4, h5, h6 {
+        color: #111827 !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -123,13 +140,12 @@ if df is not None:
         csv_data = final_table.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Export CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
     with col_b2:
-        # Excel Download Option
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             final_table.to_excel(writer, sheet_name="Sent_Summary", index=False)
         st.download_button("📥 Export Excel", data=buffer.getvalue(), file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-    # Render Table
+    # Render Dataframe with light background styling
     st.dataframe(
         final_table,
         use_container_width=True,
