@@ -146,3 +146,138 @@ def generate_styled_excel(rows_list, grand_total):
             cell.fill = fill
             cell.border = thin_border
             if col_num in [1, 3]:
+                cell.alignment = Alignment(horizontal="center")
+            elif col_num == 5:
+                cell.alignment = Alignment(horizontal="right")
+                cell.number_format = '#,##0'
+            else:
+                cell.alignment = Alignment(horizontal="left")
+
+    # Format Grand Total Row
+    for col_num in range(1, 6):
+        cell = ws.cell(row=max_row, column=col_num)
+        cell.font = font_total
+        cell.fill = fill_total
+        cell.border = thin_border
+        if col_num == 5:
+            cell.alignment = Alignment(horizontal="right")
+            cell.number_format = '#,##0'
+        elif col_num in [1, 4]:
+            cell.alignment = Alignment(horizontal="left")
+
+    # Column Widths
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+df = None
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+elif use_demo:
+    df = pd.DataFrame({
+        "Date": ["2026-10-10"] * 7,
+        "From Location Name": ["DC01 Rampura"] * 7,
+        "To Location Name": ["DS01 Sarjapur", "DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS06 Kogilu", "DS07 HAL"],
+        "Transfer Order#": ["TO-08162", "TO-08171", "TO-08185", "TO-08186", "TO-08170", "TO-08184", "TO-08174"],
+        "Status": ["Transferred"] * 7,
+        "Quantity Transferred": [151, 1178, 1069, 475, 1260, 637, 687],
+        "Reason": [
+            "INTERNAL TRANSFER",
+            "HomeRun picker · TO-08138 · vehicle KA01AB1234",
+            "HomeRun picker · TO-08179 · vehicle KA02AN1565",
+            "HomeRun picker · TO-08180 · vehicle KA01AB8634",
+            "HomeRun picker · TO-08139 · vehicle KA54A0075",
+            "HomeRun picker · TO-08181 · vehicle KA01AJ6533",
+            "HomeRun picker · TO-08140 · vehicle KA52A0811"
+        ]
+    })
+
+if df is not None:
+    df.columns = df.columns.astype(str).str.strip()
+
+    dc_df = df[df['From Location Name'].astype(str).str.contains('DC', na=False) & df['To Location Name'].astype(str).str.contains('DS', na=False)].copy()
+    sent_df = dc_df[dc_df['Status'].astype(str).str.lower().isin(['transferred', 'in transit'])].copy()
+
+    sent_df['clean_reason'] = sent_df['Reason'].apply(transform_reason)
+
+    grouped = sent_df.groupby(['Date', 'To Location Name', 'Transfer Order#', 'clean_reason'], as_index=False).agg(
+        Qty=('Quantity Transferred', 'sum')
+    )
+
+    grouped['date'] = pd.to_datetime(grouped['Date'], errors='coerce').dt.strftime('%d-%b')
+    grouped.sort_values(by=['To Location Name', 'Transfer Order#'], inplace=True)
+
+    final_table_rows = []
+    grand_total_qty = 0
+    total_to_count = len(grouped)
+
+    # Process DS Sub-totals and Build Final Display Structure
+    for ds_name, ds_group in grouped.groupby('To Location Name', sort=False):
+        ds_subtotal = ds_group['Qty'].sum()
+        grand_total_qty += ds_subtotal
+        
+        first = True
+        for row in ds_group.itertuples():
+            date_val = row.date if first else ""
+            ds_val = row._2 if first else ""
+            final_table_rows.append({
+                "date": date_val,
+                "DS": ds_val,
+                "TO": row._3,
+                "reson": row.clean_reason,
+                "qty": row.Qty,
+                "is_subtotal": False
+            })
+            first = False
+            
+        # Insert Subtotal Row per Dark Store
+        final_table_rows.append({
+            "date": "",
+            "DS": f"{ds_name} Total",
+            "TO": "",
+            "reson": "Sub-Total Qty",
+            "qty": ds_subtotal,
+            "is_subtotal": True
+        })
+
+    # Metrics Display
+    m1, m2 = st.columns(2)
+    m1.metric("Total Dispatched Quantity", f"{int(grand_total_qty):,}")
+    m2.metric("Total Transfer Orders", f"{total_to_count:,}")
+
+    st.markdown("---")
+
+    col_h, col_b1, col_b2 = st.columns([3, 1, 1])
+    with col_h:
+        st.subheader("📋 Dispatched Quantity Table")
+    with col_b1:
+        export_df = pd.DataFrame(final_table_rows)[['date', 'DS', 'TO', 'reson', 'qty']]
+        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
+    with col_b2:
+        excel_bytes = generate_styled_excel(final_table_rows, grand_total_qty)
+        st.download_button("📥 Download Excel", data=excel_bytes, file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
+    # Build HTML String without indents
+    html_rows = ""
+    for r in final_table_rows:
+        if r['is_subtotal']:
+            html_rows += f"<tr class='subtotal-row'><td></td><td style='font-weight: bold;'>{r['DS']}</td><td></td><td style='font-weight: bold;'>{r['reson']}</td><td style='text-align: right; font-weight: bold;'>{int(r['qty']):,}</td></tr>"
+        else:
+            html_rows += f"<tr><td style='text-align: center;'>{r['date']}</td><td style='text-align: left; font-weight: bold;'>{r['DS']}</td><td style='text-align: center;'>{r['TO']}</td><td style='text-align: left;'>{r['reson']}</td><td style='text-align: right;'>{int(r['qty']):,}</td></tr>"
+
+    # Add Orange Grand Total Row at bottom
+    html_rows += f"<tr class='total-row'><td style='text-align: left;'>Total</td><td></td><td></td><td style='text-align: left;'>Total Dispatched Qty</td><td style='text-align: right;'>{int(grand_total_qty):,}</td></tr>"
+
+    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 12%;">date</th><th style="width: 20%;">DS</th><th style="width: 18%;">TO</th><th style="width: 35%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
+
+    st.markdown(textwrap.dedent(raw_html), unsafe_allow_html=True)
+
+else:
+    st.info("👈 Please upload your Transfer Order file in the sidebar.")
