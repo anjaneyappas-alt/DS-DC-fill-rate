@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="DS Transfer Summary", layout="wide")
 
-# Theme Styling
+# Custom CSS Theme
 st.markdown("""
     <style>
     .stApp {
@@ -40,11 +40,12 @@ st.markdown("""
         padding: 8px 12px;
         color: #000000;
     }
-    .custom-table tr:nth-child(even) td {
-        background-color: #F9FAFB;
-    }
-    .custom-table tr:nth-child(odd) td {
-        background-color: #FFFFFF;
+    .custom-table tr.subtotal-row td {
+        background-color: #F3F4F6 !important;
+        color: #000000 !important;
+        font-weight: bold !important;
+        border-top: 1.5px solid #9CA3AF;
+        border-bottom: 1.5px solid #9CA3AF;
     }
     .custom-table tr.total-row td {
         background-color: #F8B486 !important;
@@ -93,7 +94,7 @@ def transform_reason(reason_str):
         
     return reason_str
 
-def generate_styled_excel(df, total_qty):
+def generate_styled_excel(rows_list, grand_total):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sent_Summary"
@@ -101,18 +102,21 @@ def generate_styled_excel(df, total_qty):
     headers = ["date", "DS", "TO", "reson", "qty"]
     ws.append(headers)
 
-    for row in df.itertuples(index=False):
-        ws.append([row.date, row.DS, row.TO, row.reson, row.qty])
+    for row in rows_list:
+        ws.append([row['date'], row['DS'], row['TO'], row['reson'], row['qty']])
 
-    ws.append(["Total", "", "", "Total Dispatched Qty", total_qty])
+    # Grand Total Row
+    ws.append(["Total", "", "", "Total Dispatched Qty", grand_total])
 
     font_header = Font(name="Arial", size=11, bold=True, color="000000")
     font_body = Font(name="Arial", size=10, color="000000")
+    font_subtotal = Font(name="Arial", size=10, bold=True, color="000000")
     font_total = Font(name="Arial", size=11, bold=True, color="000000")
 
     fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
     fill_even = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
     fill_odd = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    fill_subtotal = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
     fill_total = PatternFill(start_color="F8B486", end_color="F8B486", fill_type="solid")
 
     thin_border = Border(
@@ -122,6 +126,7 @@ def generate_styled_excel(df, total_qty):
         bottom=Side(style='thin', color='D1D5DB')
     )
 
+    # Format Headers
     for col_num in range(1, 6):
         cell = ws.cell(row=1, column=col_num)
         cell.font = font_header
@@ -131,10 +136,13 @@ def generate_styled_excel(df, total_qty):
 
     max_row = ws.max_row
     for row_num in range(2, max_row):
-        fill = fill_even if row_num % 2 == 0 else fill_odd
+        is_subtotal = ws.cell(row=row_num, column=4).value == "Sub-Total Qty"
+        fill = fill_subtotal if is_subtotal else (fill_even if row_num % 2 == 0 else fill_odd)
+        font = font_subtotal if is_subtotal else font_body
+
         for col_num in range(1, 6):
             cell = ws.cell(row=row_num, column=col_num)
-            cell.font = font_body
+            cell.font = font
             cell.fill = fill
             cell.border = thin_border
             if col_num in [1, 3]:
@@ -145,6 +153,7 @@ def generate_styled_excel(df, total_qty):
             else:
                 cell.alignment = Alignment(horizontal="left")
 
+    # Format Grand Total Row
     for col_num in range(1, 6):
         cell = ws.cell(row=max_row, column=col_num)
         cell.font = font_total
@@ -156,6 +165,7 @@ def generate_styled_excel(df, total_qty):
         elif col_num in [1, 4]:
             cell.alignment = Alignment(horizontal="left")
 
+    # Column Widths
     for col in ws.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
         col_letter = get_column_letter(col[0].column)
@@ -172,74 +182,4 @@ if uploaded_file is not None:
 elif use_demo:
     df = pd.DataFrame({
         "Date": ["2026-10-10"] * 7,
-        "From Location Name": ["DC01 Rampura"] * 7,
-        "To Location Name": ["DS01 Sarjapur", "DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS06 Kogilu", "DS07 HAL"],
-        "Transfer Order#": ["TO-08162", "TO-08171", "TO-08185", "TO-08186", "TO-08170", "TO-08184", "TO-08174"],
-        "Status": ["Transferred"] * 7,
-        "Quantity Transferred": [151, 1178, 1069, 475, 1260, 637, 687],
-        "Reason": [
-            "INTERNAL TRANSFER",
-            "HomeRun picker · TO-08138 · vehicle KA01AB1234",
-            "HomeRun picker · TO-08179 · vehicle KA02AN1565",
-            "HomeRun picker · TO-08180 · vehicle KA01AB8634",
-            "HomeRun picker · TO-08139 · vehicle KA54A0075",
-            "HomeRun picker · TO-08181 · vehicle KA01AJ6533",
-            "HomeRun picker · TO-08140 · vehicle KA52A0811"
-        ]
-    })
-
-if df is not None:
-    df.columns = df.columns.astype(str).str.strip()
-
-    dc_df = df[df['From Location Name'].astype(str).str.contains('DC', na=False) & df['To Location Name'].astype(str).str.contains('DS', na=False)].copy()
-    sent_df = dc_df[dc_df['Status'].astype(str).str.lower().isin(['transferred', 'in transit'])].copy()
-
-    sent_df['clean_reason'] = sent_df['Reason'].apply(transform_reason)
-
-    grouped = sent_df.groupby(['Date', 'To Location Name', 'Transfer Order#', 'clean_reason'], as_index=False).agg(
-        Qty=('Quantity Transferred', 'sum')
-    )
-
-    grouped['date'] = pd.to_datetime(grouped['Date'], errors='coerce').dt.strftime('%d-%b')
-    grouped.sort_values(by=['To Location Name', 'Transfer Order#'], inplace=True)
-
-    grouped['Is_First_DS'] = ~grouped.duplicated(subset=['To Location Name'], keep='first')
-
-    grouped['display_date'] = grouped.apply(lambda r: r['date'] if r['Is_First_DS'] else "", axis=1)
-    grouped['display_ds'] = grouped.apply(lambda r: r['To Location Name'] if r['Is_First_DS'] else "", axis=1)
-
-    result_df = grouped[['display_date', 'display_ds', 'Transfer Order#', 'clean_reason', 'Qty']].copy()
-    result_df.columns = ['date', 'DS', 'TO', 'reson', 'qty']
-
-    total_qty = result_df['qty'].sum()
-
-    m1, m2 = st.columns(2)
-    m1.metric("Total Dispatched Quantity", f"{int(total_qty):,}")
-    m2.metric("Total Transfer Orders", f"{len(result_df):,}")
-
-    st.markdown("---")
-
-    col_h, col_b1, col_b2 = st.columns([3, 1, 1])
-    with col_h:
-        st.subheader("📋 Dispatched Quantity Table")
-    with col_b1:
-        csv_data = result_df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
-    with col_b2:
-        excel_bytes = generate_styled_excel(result_df, total_qty)
-        st.download_button("📥 Download Excel", data=excel_bytes, file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-    # Build HTML string without indents
-    html_rows = ""
-    for idx, row in result_df.iterrows():
-        html_rows += f"<tr><td style='text-align: center;'>{row['date']}</td><td style='text-align: left; font-weight: bold;'>{row['DS']}</td><td style='text-align: center;'>{row['TO']}</td><td style='text-align: left;'>{row['reson']}</td><td style='text-align: right; font-weight: 500;'>{int(row['qty']):,}</td></tr>"
-
-    html_rows += f"<tr class='total-row'><td style='text-align: left;'>Total</td><td></td><td></td><td style='text-align: left;'>Total Dispatched Qty</td><td style='text-align: right;'>{int(total_qty):,}</td></tr>"
-
-    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 12%;">date</th><th style="width: 20%;">DS</th><th style="width: 18%;">TO</th><th style="width: 35%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
-
-    # Unindented markdown to guarantee proper table rendering
-    st.markdown(textwrap.dedent(raw_html), unsafe_allow_html=True)
-
-else:
-    st.info("👈 Please upload your Transfer Order file in the sidebar.")
+        "From Location Name": ["DC01 Rampura"] * 7
