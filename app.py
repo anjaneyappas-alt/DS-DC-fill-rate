@@ -39,6 +39,7 @@ st.markdown("""
         border: 1px solid #E5E7EB;
         padding: 8px 12px;
         color: #000000;
+        vertical-align: middle;
     }
     .custom-table tr:nth-child(even) td {
         background-color: #F9FAFB;
@@ -95,19 +96,13 @@ def classify_row_reason(reason_str, item_name_str=""):
         
     return reason_str if reason_str else "PLY"
 
-def generate_styled_excel(df, grand_total):
+def generate_styled_excel(grouped_df, grand_total):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sent_Summary"
 
     headers = ["date", "DS", "TO", "reson", "qty"]
     ws.append(headers)
-
-    for row in df.itertuples(index=False):
-        ws.append([row.date, row.DS, row.TO, row.reson, row.qty])
-
-    # Grand Total Row
-    ws.append(["Total", "", "", "Total Dispatched Qty", grand_total])
 
     font_header = Font(name="Arial", size=11, bold=True, color="000000")
     font_body = Font(name="Arial", size=10, color="000000")
@@ -125,6 +120,7 @@ def generate_styled_excel(df, grand_total):
         bottom=Side(style='thin', color='D1D5DB')
     )
 
+    # Format Headers
     for col_num in range(1, 6):
         cell = ws.cell(row=1, column=col_num)
         cell.font = font_header
@@ -132,33 +128,47 @@ def generate_styled_excel(df, grand_total):
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = thin_border
 
+    current_row = 2
+    for ds_name, group in grouped_df.groupby('To Location Name', sort=False):
+        group_len = len(group)
+        start_row = current_row
+        end_row = current_row + group_len - 1
+
+        for row in group.itertuples():
+            ws.append([row.date, row._2, row.TO, row.clean_reason, row.Qty])
+            fill = fill_even if current_row % 2 == 0 else fill_odd
+            for col_num in range(1, 6):
+                cell = ws.cell(row=current_row, column=col_num)
+                cell.font = font_body
+                cell.fill = fill
+                cell.border = thin_border
+                if col_num in [1, 3]:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_num == 5:
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = '#,##0'
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+            current_row += 1
+
+        # Vertically merge Date & DS Name cells for the group
+        if group_len > 1:
+            ws.merge_cells(start_row=start_row, start_column=1, end_row=end_row, end_column=1)
+            ws.merge_cells(start_row=start_row, start_column=2, end_row=end_row, end_column=2)
+
+    # Grand Total Row
+    ws.append(["Total", "", "", "Total Dispatched Qty", grand_total])
     max_row = ws.max_row
-    for row_num in range(2, max_row):
-        fill = fill_even if row_num % 2 == 0 else fill_odd
-
-        for col_num in range(1, 6):
-            cell = ws.cell(row=row_num, column=col_num)
-            cell.font = font_body
-            cell.fill = fill
-            cell.border = thin_border
-            if col_num in [1, 3]:
-                cell.alignment = Alignment(horizontal="center")
-            elif col_num == 5:
-                cell.alignment = Alignment(horizontal="right")
-                cell.number_format = '#,##0'
-            else:
-                cell.alignment = Alignment(horizontal="left")
-
     for col_num in range(1, 6):
         cell = ws.cell(row=max_row, column=col_num)
         cell.font = font_total
         cell.fill = fill_total
         cell.border = thin_border
         if col_num == 5:
-            cell.alignment = Alignment(horizontal="right")
+            cell.alignment = Alignment(horizontal="right", vertical="center")
             cell.number_format = '#,##0'
         elif col_num in [1, 4]:
-            cell.alignment = Alignment(horizontal="left")
+            cell.alignment = Alignment(horizontal="left", vertical="center")
 
     for col in ws.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
@@ -178,13 +188,13 @@ elif use_demo:
         "Date": ["2026-10-10"] * 8,
         "From Location Name": ["DC01 Rampura"] * 8,
         "To Location Name": ["DS01 Sarjapur", "DS01 Sarjapur", "DS01 Sarjapur", "DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS06 Kogilu"],
-        "Transfer Order#": ["TO-08890", "TO-08897", "TO-08162", "TO-08171", "TO-08185", "TO-08186", "TO-08170", "TO-08184"],
+        "Transfer Order#": ["TO-08871", "TO-08878", "TO-08880", "TO-08171", "TO-08185", "TO-08186", "TO-08170", "TO-08184"],
         "Status": ["Transferred"] * 8,
-        "Quantity Transferred": [125, 103, 151, 1178, 1069, 475, 1260, 637],
+        "Quantity Transferred": [586, 29, 148, 1178, 1069, 475, 1260, 637],
         "Reason": [
-            "INTERNAL TRANSFER cement",
-            "INTERNAL TRANSFER cement",
+            "HomeRun picker · TO-08855 · vehicle KA01AB1234",
             "INTERNAL TRANSFER",
+            "INTERNAL TRANSFER cement",
             "HomeRun picker · TO-08138 · vehicle KA01AB1234",
             "HomeRun picker · TO-08179 · vehicle KA02AN1565",
             "HomeRun picker · TO-08180 · vehicle KA01AB8634",
@@ -192,9 +202,9 @@ elif use_demo:
             "HomeRun picker · TO-08181 · vehicle KA01AJ6533"
         ],
         "Item Name": [
-            "Asian Paints TruCare Wall Putty, 40 Kg Bag",
-            "Asian Paints TruCare Wall Putty, 40 Kg Bag",
             "Hettich Hinges",
+            "Ply Sheet",
+            "Asian Paints TruCare Wall Putty, 40 Kg Bag",
             "Hettich Hinges",
             "Hettich Hinges",
             "Hettich Hinges",
@@ -217,7 +227,7 @@ if df is not None:
     # Format Date
     sent_df['date'] = pd.to_datetime(sent_df['Date'], errors='coerce').dt.strftime('%d-%b')
 
-    # Merge TO Numbers if Date, DS, and Reason are identical (e.g., TO-08890 & TO-08897 for BAG)
+    # Group by Date, DS, and Reason (Merges TO numbers for identical categories)
     grouped = sent_df.groupby(['date', 'To Location Name', 'clean_reason'], as_index=False).agg(
         TO=('Transfer Order#', lambda x: " & ".join(sorted(x.unique()))),
         Qty=('Quantity Transferred', 'sum')
@@ -225,20 +235,11 @@ if df is not None:
 
     grouped.sort_values(by=['To Location Name', 'TO'], inplace=True)
 
-    # Visual Grouping (Blank duplicate Date & DS names)
-    grouped['Is_First_DS'] = ~grouped.duplicated(subset=['To Location Name'], keep='first')
-
-    grouped['display_date'] = grouped.apply(lambda r: r['date'] if r['Is_First_DS'] else "", axis=1)
-    grouped['display_ds'] = grouped.apply(lambda r: r['To Location Name'] if r['Is_First_DS'] else "", axis=1)
-
-    result_df = grouped[['display_date', 'display_ds', 'TO', 'clean_reason', 'Qty']].copy()
-    result_df.columns = ['date', 'DS', 'TO', 'reson', 'qty']
-
-    grand_total_qty = result_df['qty'].sum()
+    grand_total_qty = grouped['Qty'].sum()
 
     m1, m2 = st.columns(2)
     m1.metric("Total Dispatched Quantity", f"{int(grand_total_qty):,}")
-    m2.metric("Total Dispatched Rows", f"{len(result_df):,}")
+    m2.metric("Total Dispatched Rows", f"{len(grouped):,}")
 
     st.markdown("---")
 
@@ -246,19 +247,34 @@ if df is not None:
     with col_h:
         st.subheader("📋 Dispatched Quantity Table")
     with col_b1:
-        csv_data = result_df.to_csv(index=False).encode('utf-8')
+        csv_data = grouped[['date', 'To Location Name', 'TO', 'clean_reason', 'Qty']].to_csv(index=False).encode('utf-8')
         st.download_button("📥 Download CSV", data=csv_data, file_name="sent_qty_summary.csv", mime="text/csv", use_container_width=True)
     with col_b2:
-        excel_bytes = generate_styled_excel(result_df, grand_total_qty)
+        excel_bytes = generate_styled_excel(grouped, grand_total_qty)
         st.download_button("📥 Download Excel", data=excel_bytes, file_name="sent_qty_summary.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
+    # Build HTML Rows with rowspan to center Date and DS Name across matching TOs
     html_rows = ""
-    for idx, row in result_df.iterrows():
-        html_rows += f"<tr><td style='text-align: center;'>{row['date']}</td><td style='text-align: left; font-weight: bold;'>{row['DS']}</td><td style='text-align: center;'>{row['TO']}</td><td style='text-align: left;'>{row['reson']}</td><td style='text-align: right;'>{int(row['qty']):,}</td></tr>"
+    for ds_name, group in grouped.groupby('To Location Name', sort=False):
+        rowspan_count = len(group)
+        first_row = True
+        
+        for row in group.itertuples():
+            html_rows += "<tr>"
+            if first_row:
+                html_rows += f"<td rowspan='{rowspan_count}' style='text-align: center; font-weight: bold; vertical-align: middle; background-color: #FFFFFF;'>{row.date}</td>"
+                html_rows += f"<td rowspan='{rowspan_count}' style='text-align: center; font-weight: bold; vertical-align: middle; background-color: #FFFFFF;'>{row._2}</td>"
+                first_row = False
+                
+            html_rows += f"<td style='text-align: center;'>{row.TO}</td>"
+            html_rows += f"<td style='text-align: center;'>{row.clean_reason}</td>"
+            html_rows += f"<td style='text-align: right;'>{int(row.Qty):,}</td>"
+            html_rows += "</tr>"
 
+    # Orange Grand Total Row at Bottom
     html_rows += f"<tr class='total-row'><td style='text-align: left;'>Total</td><td></td><td></td><td style='text-align: left;'>Total Dispatched Qty</td><td style='text-align: right;'>{int(grand_total_qty):,}</td></tr>"
 
-    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 12%;">date</th><th style="width: 20%;">DS</th><th style="width: 25%;">TO</th><th style="width: 28%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
+    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 15%;">date</th><th style="width: 25%;">DS</th><th style="width: 25%;">TO</th><th style="width: 20%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
 
     st.markdown(textwrap.dedent(raw_html), unsafe_allow_html=True)
 
