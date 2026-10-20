@@ -175,22 +175,24 @@ if uploaded_file is not None:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
 elif use_demo:
     df = pd.DataFrame({
-        "Date": ["2026-10-10"] * 7,
-        "From Location Name": ["DC01 Rampura"] * 7,
-        "To Location Name": ["DS01 Sarjapur", "DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS06 Kogilu", "DS07 HAL"],
-        "Transfer Order#": ["TO-08162", "TO-08171", "TO-08185", "TO-08186", "TO-08170", "TO-08184", "TO-08174"],
-        "Status": ["Transferred"] * 7,
-        "Quantity Transferred": [151, 1178, 1069, 475, 1260, 637, 687],
+        "Date": ["2026-10-10"] * 8,
+        "From Location Name": ["DC01 Rampura"] * 8,
+        "To Location Name": ["DS01 Sarjapur", "DS01 Sarjapur", "DS01 Sarjapur", "DS01 Sarjapur", "DS02 Bileshivale", "DS03 Kengeri", "DS05 Basavanapura", "DS06 Kogilu"],
+        "Transfer Order#": ["TO-08890", "TO-08897", "TO-08162", "TO-08171", "TO-08185", "TO-08186", "TO-08170", "TO-08184"],
+        "Status": ["Transferred"] * 8,
+        "Quantity Transferred": [125, 103, 151, 1178, 1069, 475, 1260, 637],
         "Reason": [
+            "INTERNAL TRANSFER cement",
+            "INTERNAL TRANSFER cement",
             "INTERNAL TRANSFER",
             "HomeRun picker · TO-08138 · vehicle KA01AB1234",
             "HomeRun picker · TO-08179 · vehicle KA02AN1565",
             "HomeRun picker · TO-08180 · vehicle KA01AB8634",
             "HomeRun picker · TO-08139 · vehicle KA54A0075",
-            "HomeRun picker · TO-08181 · vehicle KA01AJ6533",
-            "HomeRun picker · TO-08140 · vehicle KA52A0811"
+            "HomeRun picker · TO-08181 · vehicle KA01AJ6533"
         ],
         "Item Name": [
+            "Asian Paints TruCare Wall Putty, 40 Kg Bag",
             "Asian Paints TruCare Wall Putty, 40 Kg Bag",
             "Hettich Hinges",
             "Hettich Hinges",
@@ -212,12 +214,16 @@ if df is not None:
 
     sent_df['clean_reason'] = sent_df.apply(lambda r: classify_row_reason(r['Reason'], r['Item Name']), axis=1)
 
-    grouped = sent_df.groupby(['Date', 'To Location Name', 'Transfer Order#', 'clean_reason'], as_index=False).agg(
+    # Format Date
+    sent_df['date'] = pd.to_datetime(sent_df['Date'], errors='coerce').dt.strftime('%d-%b')
+
+    # Merge TO Numbers if Date, DS, and Reason are identical (e.g., TO-08890 & TO-08897 for BAG)
+    grouped = sent_df.groupby(['date', 'To Location Name', 'clean_reason'], as_index=False).agg(
+        TO=('Transfer Order#', lambda x: " & ".join(sorted(x.unique()))),
         Qty=('Quantity Transferred', 'sum')
     )
 
-    grouped['date'] = pd.to_datetime(grouped['Date'], errors='coerce').dt.strftime('%d-%b')
-    grouped.sort_values(by=['To Location Name', 'Transfer Order#'], inplace=True)
+    grouped.sort_values(by=['To Location Name', 'TO'], inplace=True)
 
     # Visual Grouping (Blank duplicate Date & DS names)
     grouped['Is_First_DS'] = ~grouped.duplicated(subset=['To Location Name'], keep='first')
@@ -225,15 +231,14 @@ if df is not None:
     grouped['display_date'] = grouped.apply(lambda r: r['date'] if r['Is_First_DS'] else "", axis=1)
     grouped['display_ds'] = grouped.apply(lambda r: r['To Location Name'] if r['Is_First_DS'] else "", axis=1)
 
-    result_df = grouped[['display_date', 'display_ds', 'Transfer Order#', 'clean_reason', 'Qty']].copy()
+    result_df = grouped[['display_date', 'display_ds', 'TO', 'clean_reason', 'Qty']].copy()
     result_df.columns = ['date', 'DS', 'TO', 'reson', 'qty']
 
     grand_total_qty = result_df['qty'].sum()
-    total_to_count = len(result_df)
 
     m1, m2 = st.columns(2)
     m1.metric("Total Dispatched Quantity", f"{int(grand_total_qty):,}")
-    m2.metric("Total Transfer Orders", f"{total_to_count:,}")
+    m2.metric("Total Dispatched Rows", f"{len(result_df):,}")
 
     st.markdown("---")
 
@@ -253,7 +258,7 @@ if df is not None:
 
     html_rows += f"<tr class='total-row'><td style='text-align: left;'>Total</td><td></td><td></td><td style='text-align: left;'>Total Dispatched Qty</td><td style='text-align: right;'>{int(grand_total_qty):,}</td></tr>"
 
-    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 12%;">date</th><th style="width: 20%;">DS</th><th style="width: 18%;">TO</th><th style="width: 35%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
+    raw_html = f"""<table class="custom-table"><thead><tr><th style="width: 12%;">date</th><th style="width: 20%;">DS</th><th style="width: 25%;">TO</th><th style="width: 28%;">reson</th><th style="width: 15%;">qty</th></tr></thead><tbody>{html_rows}</tbody></table>"""
 
     st.markdown(textwrap.dedent(raw_html), unsafe_allow_html=True)
 
